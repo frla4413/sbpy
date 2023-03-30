@@ -13,13 +13,14 @@ More precisely the boundaries of a grid function f are
     West:  f[0,:]
 
 Grids (also referred to as blocks) are stored as pairs of matrices (X,Y), such
-that (X[i,j], Y[i,j]) is the (i,j):th node in the grid. Multiblock grids can be thought of as lists of such pairs. A list F of grid functions is called a 'multiblock function' and should be interpreted as function evaluations on a
+that (X[i,j], Y[i,j]) is the (i,j):th node in the grid. Multiblock grids can be
+thought of as lists of such pairs. A list F of grid functions is called a
+'multiblock function' and should be interpreted as function evaluations on a
 sequence of grids constituting a multiblock grid.
 """
 
 from enum import Enum
 import itertools
-import pdb
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -228,14 +229,6 @@ class MultiblockGrid:
         """ Returns a matrix pair (X,Y) representing the k:th block. """
         return self.blocks[k]
 
-    def get_X(self, k):
-        """ Returns a matrix pair (X,Y) representing the k:th block. """
-        return self.blocks[k][0]
-
-    def get_Y(self, k):
-        """ Returns a matrix pair (X,Y) representing the k:th block. """
-        return self.blocks[k][1]
-
 
     def is_shape_consistent(self, F):
         """ Check if a multiblock function F is shape consistent with grid. """
@@ -317,18 +310,10 @@ class MultiblockGrid:
         elif side == 's':
             row_pos = np.zeros(X.shape[0])
             col_pos = np.arange(X.shape[1])
-            #col_pos = np.arange(X.shape[0])
-            #row_pos = np.arange(X.shape[0])
-            #col_pos = np.zeros(X.shape[0])
             return sparse.csr_matrix((F, (row_pos, col_pos)), shape=X.shape)
         elif side == 'n':
             row_pos = (X.shape[0]-1)*np.ones(X.shape[0])
-            col_pos = np.arange(row_pos.shape[0])
-            #col_pos = (X.shape[0])*np.ones(X.shape[0])
-            #row_pos = np.arange(col_pos.shape[0])
-
-            #col_pos = (X.shape[0]-1)*np.ones(X.shape[0])
-
+            col_pos = np.arange(X.shape[1])
             return sparse.csr_matrix((F, (row_pos, col_pos)), shape=X.shape)
 
     
@@ -346,6 +331,7 @@ class MultiblockGrid:
             return True
         else:
             return False
+
 
     def is_flipped_interface(self, interface_idx):
         """ Check if an interface has flipped orientation compared to its
@@ -381,7 +367,6 @@ class MultiblockGrid:
                 ax.text(np.mean(x),np.mean(y),side)
 
         ax.axis('equal')
-        ax.set_xlim([0,1])
         plt.show()
 
 
@@ -449,18 +434,14 @@ class MultiblockGrid:
         ax.axis('equal')
         plt.show()
 
-    def plot_grid_function(self, F, title = None):
+    def plot_grid_function(self, F):
         ''' Plot a grid function on a single block (block 0) '''
 
-        #fig = plt.figure(figsize=(11,11))
-        #ax = fig.gca(projection='3d')
+        fig = plt.figure()
+        ax = fig.gca(projection='3d')
         X,Y = self.get_blocks()[0]
-        fig,ax = plt.subplots(figsize=(11,11), subplot_kw={"projection":"3d"})
-        fig = ax.plot_surface(X, Y, F, cmap=cm.jet,
-                   linewidth=0, antialiased=False)
-
-        if title is not None:
-            ax.set_title(title)
+        surf = ax.plot_surface(X, Y, F, cmap=cm.jet,
+                       linewidth=0, antialiased=False)
         plt.show()
 
 
@@ -509,7 +490,7 @@ class MultiblockGrid:
 class MultiblockSBP:
     """ A class combining MultiblockGrid functionality and SBP2D functionality.  """
 
-    def __init__(self, grid, accuracy_x = 2, accuracy_y = 2, periodic = False):
+    def __init__(self, grid, accuracy = 2):
         """ Initializes a MultiblockSBP object.
         Args:
             grid: A MultiblockGrid object.
@@ -522,10 +503,8 @@ class MultiblockSBP:
         # Create SBP2D objects for each block.
         self.sbp_ops = []
         for (X,Y) in self.grid.get_blocks():
-            if periodic:
-                self.sbp_ops.append(operators.SBP2DPeriodic(X,Y,accuracy_x,accuracy_y))
-            else:
-                self.sbp_ops.append(operators.SBP2D(X,Y,accuracy_x, accuracy_y))
+            self.sbp_ops.append(operators.SBP2D(X,Y,accuracy))
+
 
     def diffx(self, U):
         """ Differentiates a Multiblock function with respect to x. """
@@ -585,48 +564,48 @@ class MultiblockSBP:
 
 
 
-#class MultiblockGridSBP(MultiblockGrid):
-#    """ A class combining MultiblockGrid functionality and SBP2D functionality.  """
-#
-#    def __init__(self, blocks, accuracy = 2):
-#        """ Initializes a MultiblockSBP object.
-#        Args:
-#            blocks: A list of matrix pairs representing the blocks.
-#        Optional:
-#            accuracy: The interior accuracy of the difference operators (2 or 4).
-#        """
-#        super().__init__(blocks)
-#
-#        # Create SBP2D objects for each block.
-#        self.sbp_ops = []
-#        for (X,Y) in self.get_blocks():
-#            self.sbp_ops.append(operators.SBP2D(X,Y,accuracy))
-#
-#
-#    def diffx(self, U):
-#        """ Differentiates a Multiblock function with respect to x. """
-#        return np.array([ self.sbp_ops[i].diffx(U[i]) for
-#                          i in range(self.num_blocks) ])
-#
-#
-#    def diffy(self, U):
-#        """ Differentiates a Multiblock function with respect to y. """
-#        return np.array([ self.sbp_ops[i].diffy(U[i]) for
-#                          i in range(self.num_blocks) ])
-#
-#    def integrate(self, U):
-#        """ Integrates a Multiblock function over the domain. """
-#        return sum([ self.sbp_ops[i].integrate(U[i]) for
-#                     i in range(self.num_blocks) ])
-#
-#    def get_normals(self, block_idx, side):
-#        """ Get the normals of a specified side of a particular block. """
-#        return self.sbp_ops[block_idx].normals[side]
-#
-#
-#    def get_sbp_ops(self):
-#        """ Returns a list of SBP2D objects associated to each block. """
-#        return self.sbp_ops
+class MultiblockGridSBP(MultiblockGrid):
+    """ A class combining MultiblockGrid functionality and SBP2D functionality.  """
+
+    def __init__(self, blocks, accuracy = 2):
+        """ Initializes a MultiblockSBP object.
+        Args:
+            blocks: A list of matrix pairs representing the blocks.
+        Optional:
+            accuracy: The interior accuracy of the difference operators (2 or 4).
+        """
+        super().__init__(blocks)
+
+        # Create SBP2D objects for each block.
+        self.sbp_ops = []
+        for (X,Y) in self.get_blocks():
+            self.sbp_ops.append(operators.SBP2D(X,Y,accuracy))
+
+
+    def diffx(self, U):
+        """ Differentiates a Multiblock function with respect to x. """
+        return np.array([ self.sbp_ops[i].diffx(U[i]) for
+                          i in range(self.num_blocks) ])
+
+
+    def diffy(self, U):
+        """ Differentiates a Multiblock function with respect to y. """
+        return np.array([ self.sbp_ops[i].diffy(U[i]) for
+                          i in range(self.num_blocks) ])
+
+    def integrate(self, U):
+        """ Integrates a Multiblock function over the domain. """
+        return sum([ self.sbp_ops[i].integrate(U[i]) for
+                     i in range(self.num_blocks) ])
+
+    def get_normals(self, block_idx, side):
+        """ Get the normals of a specified side of a particular block. """
+        return self.sbp_ops[block_idx].normals[side]
+
+
+    def get_sbp_ops(self):
+        """ Returns a list of SBP2D objects associated to each block. """
+        return self.sbp_ops
 
 
 def load_p3d(filename):

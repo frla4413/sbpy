@@ -1,8 +1,11 @@
 """ This module contains various utility functions. """
 
+import pdb
 import itertools
 import numpy as np
 from sbpy import grid2d
+from matplotlib import rc,cm
+import matplotlib.pyplot as plt
 
 def create_convergence_table(labels, errors, h, title=None, filename=None):
     """
@@ -115,8 +118,34 @@ def get_bump_grid(N):
     x0 = -1.5
     x1 = 1.5
     dx = (x1-x0)/(N-1)
-    y0 = lambda x: 0.0625*np.exp(-25*x**2)
-    y1 = lambda y: 0.8
+    y0 = lambda x: 4*0.0625*np.exp(-25*x**2)
+    y1 = lambda x: 0.8 - 4*0.0625*np.exp(-25*x**2)
+    x = np.zeros(N*N)
+    y = np.copy(x)
+    pos = 0
+    for i in range(N):
+        for j in range(N):
+            x_val = x0 + i*dx
+            x[pos] = x_val
+            y[pos] = y0(x_val) + j*(y1(x_val)-y0(x_val))/(N-1)
+            pos = pos+1
+
+    X = np.reshape(x,(N,N))
+    Y = np.reshape(y,(N,N))
+
+    return X,Y
+
+def get_channel_grid(N,x0 = 0, x1 = 1):
+    """ Returns a grid with curved floor and ceiling.
+    Arguments:
+        N: Number of gridpoints in each direction.
+
+    Returns:
+        (X,Y): A pair of matrices defining the grid.
+    """
+    dx = (x1-x0)/(N-1)
+    y0 = lambda x: -1 + 0.2*x + 0.2*x**2 + 0.0625*np.exp(-25*x**2 + 0.5)
+    y1 = lambda x: 1 - 0.2*x + 0.1*np.sin(2*np.pi*x)
     x = np.zeros(N*N)
     y = np.copy(x)
     pos = 0
@@ -199,34 +228,31 @@ def is_interactive():
     import __main__ as main
     return not hasattr(main, '__file__')
 
+def surf_plot(X,Y,Z):
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    surf = ax.plot_surface(X, Y, Z, cmap=cm.jet,
+                   linewidth=0, antialiased=False)
+    plt.show()
 
 
-
-def solution_to_tec(grid,U,V,W,P,name_base):
-
-    for i in range(len(U)):
-        filename = name_base+str(i)+'.tec'
-        export_to_tecplot(grid,U[i],V[i],W[i],P[i],filename)
-
-
-def export_to_tecplot(grid,U,V,W,P,filename):
+def export_to_tecplot(grid,U,V,P,filename):
     blocks = grid.get_blocks()
 
     with open(filename,'w') as f:
         f.write('TITLE = "incompressible_navier_stokes_solution.tec"\n')
-        f.write('VARIABLES = "x","y","u","v","w","p"\n')
+        f.write('VARIABLES = "x","y","u","v","p"\n')
 
         for k in range(len(blocks)):
             X = blocks[k][0]
             Y = blocks[k][1]
 
-            f.write('ZONE I = ' + str(X.shape[0])+ \
-                    ', J = ' + str(X.shape[1])+ ', F = POINT\n')
+            f.write('ZONE I = ' + str(X.shape[1])+ \
+                    ', J = ' + str(X.shape[0])+ ', F = POINT\n')
             for j in range(X.shape[1]):
                 for i in range(X.shape[0]):
                     my_str = str(X[i,j]) + ' ' + str(Y[i,j]) +\
                             ' ' + str(U[i,j]) + ' ' + str(V[i,j]) +\
-                            ' ' + str(W[i,j]) + ' ' + str(P[i,j]) + '\n'
+                            ' ' + str(P[i,j]) + '\n'
                     f.write(my_str)
         f.close()
-
