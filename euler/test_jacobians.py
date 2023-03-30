@@ -7,26 +7,31 @@ from scipy.optimize import approx_fprime
 
 from sbpy.utils import get_circle_sector_grid, get_bump_grid
 from sbpy.grid2d import MultiblockGrid, MultiblockSBP
-from euler import euler_operator, wall_operator, outflow_operator, pressure_operator, inflow_operator, interior_low_operator 
+from euler import euler_operator, wall_operator, outflow_operator, pressure_operator, inflow_operator, interior_low_operator, periodic_in_x_operator
 
 ## to run all tests: python test_jacobians.py
-
 ## to run one test : python -m test_jacobians TestJacobians.test_pressure_jacobian
 
 
 class TestJacobians(unittest.TestCase):
 
-    (X,Y) = get_circle_sector_grid(3, 0.0, 3.14/2, 0.2, 1.0)
-    (X,Y) = get_bump_grid(3)
-    grid = MultiblockGrid([(X,Y+1)])
+    #(X,Y) = get_circle_sector_grid(3, 0.0, 3.14/2, 0.2, 1.0)
+    #(X,Y) = get_bump_grid(3)
+    (X,Y) = np.meshgrid(np.linspace(0,1,4), np.linspace(0,1,3))
+    X = np.transpose(X)
+    Y = np.transpose(Y)
+
+    grid = MultiblockGrid([(X,Y)])
     sbp = MultiblockSBP(grid)
-    U = X
-    V = Y
+    #grid.plot_domain()
+    U = 1 + X# 0.1*np.sin(X)
+    V = 1 + Y
     P = X**2 + Y**2
     state = np.array([U, V, P]).flatten()
 
 
     def test_euler_jacobian(self):
+        e = 0.01
         
         S, J,ux,uy,vx,vy = euler_operator(self.sbp, self.state, e)
 
@@ -37,7 +42,6 @@ class TestJacobians(unittest.TestCase):
             err = np.linalg.norm(grad_approx-grad_exact, ord=np.inf)
             print("Euler OP, Gradient error = {:.2e}".format(err))
             self.assertTrue(err < 1e-5)
-
 
     def test_wall_jacobian(self):
 
@@ -127,6 +131,28 @@ class TestJacobians(unittest.TestCase):
                 return interior_low_operator(self.sbp, x, 0, \
                                          lw_slice1, lw_slice2, uy, e)[0][i]
 
+            grad_approx = approx_fprime(self.state, f, 1e-8)
+            grad_exact = J[i,:]
+            err = np.linalg.norm(grad_approx-grad_exact, ord=np.inf)
+            print("Outflow SAT, Gradient error = {:.2e}".format(err))
+            self.assertTrue(err < 1e-5)
+
+    def test_periodic_x_jacobian(self):
+        turbulence = False
+
+        e = 0
+
+        S, J,ux,uy,vx,vy = euler_operator(self.sbp, self.state, e)
+        S, J = periodic_in_x_operator(self.sbp, self.state, 0, ux, uy, vx, vy, \
+                                         e, turb_model = turbulence)
+
+        J = J.todense()
+
+        for i,grad in enumerate(J):
+            def f(x):
+                S, J,ux,uy,vx,vy = euler_operator(self.sbp, x, e)
+                return periodic_in_x_operator(self.sbp, x, 0, ux, uy, vx, vy, \
+                                         e, turb_model = turbulence)[0][i]
             grad_approx = approx_fprime(self.state, f, 1e-8)
             grad_exact = J[i,:]
             err = np.linalg.norm(grad_approx-grad_exact, ord=np.inf)
