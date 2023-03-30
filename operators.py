@@ -91,7 +91,7 @@ class SBP1D:
             
         if accuracy == 8:
             # from sbp_opmod.m
-            Nx = N+1
+            Nx = N
             p_block = np.array([1498139/5080320, 1107307/725760, 
                                20761/80640, 1304999/725760, 
                                299527/725760, 103097/80640,
@@ -415,7 +415,9 @@ class SBP2D:
 
 
 class SBP2DPeriodic:
-    """ Class representing 2D finite difference SBP operators.
+    """ Class representing 2D finite difference SBP operators. 
+        This is a limited version for square domains with periodicity in the 
+        y-direction.
 
     This class defines 2D curvilinear SBP operators on a supplied grid X, Y,
     based on Ålund & Nordström (JCP, 2019).  Here X and Y are 2D numpy arrays
@@ -445,7 +447,8 @@ class SBP2DPeriodic:
 
         """
         assert(X.shape == Y.shape)
-        assert(accuracy_x and accuracy_y in [2,4,8])
+        assert(accuracy_y in [2])
+        assert(accuracy_x in [2,4,8])
 
         self.X = X
         self.Y = Y
@@ -456,15 +459,10 @@ class SBP2DPeriodic:
         x = X[:,0]
         y = Y[0]
         self.sbp_xi  = SBP1D(self.Nx, (x[-1] - x[0])/(self.Nx-1), 
-                             accuracy_x, periodic = True)
+                             accuracy_x, periodic = False)
         self.sbp_eta = SBP1D(self.Ny, (y[-1] - y[0])/(self.Ny-1), 
-                             accuracy_y, periodic = False)
+                             accuracy_y, periodic = True)
         
-        self.dx_dxi  = np.ones(X.shape)#self.sbp_xi.D @ X
-        self.dx_deta = X @ np.transpose(self.sbp_eta.D)
-        self.dy_dxi  = np.zeros(Y.shape)#self.sbp_xi.D @ Y
-        self.dy_deta = Y @ np.transpose(self.sbp_eta.D)
-        self.jac     = self.dx_dxi*self.dy_deta - self.dx_deta*self.dy_dxi
         self.sides   = { 'w': np.array([[x,y] for x,y in zip(X[0,:], Y[0,:])]),
                          'e': np.array([[x,y] for x,y in zip(X[-1,:], Y[-1,:])]),
                          's': np.array([[x,y] for x,y in zip(X[:,0], Y[:, 0])]),
@@ -474,28 +472,8 @@ class SBP2DPeriodic:
         self.Dx = sparse.kron(self.sbp_xi.D, self.Iy)
         self.Dy = sparse.kron(self.Ix, self.sbp_eta.D)
         
-        #Construct 2D SBP operators.
-        self.J    = sparse.diags(self.jac.flatten())
-        self.Jinv = sparse.diags(1/self.jac.flatten())
-        self.Xxi  = sparse.diags(self.dx_dxi.flatten())
-        self.Xeta = sparse.diags(self.dx_deta.flatten())
-        self.Yxi  = sparse.diags(self.dy_dxi.flatten())
-        self.Yeta = sparse.diags(self.dy_deta.flatten())
-        self.Dxi  = sparse.kron(self.sbp_xi.D, self.Iy)
-        self.Deta = sparse.kron(self.Ix, self.sbp_eta.D)
-        self.Dx   = 0.5*self.Jinv*(self.Yeta @ self.Dxi +
-                                   self.Dxi @ self.Yeta -
-                                   self.Yxi @ self.Deta -
-                                   self.Deta @ self.Yxi)
-        self.Dy   = 0.5*self.Jinv*(self.Xxi @ self.Deta +
-                                   self.Deta @ self.Xxi -
-                                   self.Xeta @ self.Dxi -
-                                   self.Dxi @ self.Xeta)
-        self.P = self.J@sparse.kron(self.sbp_xi.P, self.sbp_eta.P)
+        self.P = sparse.kron(self.sbp_xi.P, self.sbp_eta.P)
         self.Pinv = sparse.diags(1/self.P.data)
-
-        #self.P = sparse.kron(self.sbp_xi.P, self.sbp_eta.P)
-        #self.Pinv = sparse.diags(1/self.P.data)
 
         # Save matrix version of volume quadrature.
         self.volume_quadrature = np.reshape(self.P.diagonal(),
@@ -506,35 +484,10 @@ class SBP2DPeriodic:
         self.pxi = np.diag(self.sbp_xi.P.todense())
         self.peta = np.diag(self.sbp_eta.P.todense())
 
-        #self.boundary_quadratures['w'] = self.peta
-        #self.boundary_quadratures['e'] = self.peta
-        #self.boundary_quadratures['s'] = self.pxi
-        #self.boundary_quadratures['n'] = self.pxi
-
-        # Construct boundary quadratures.
-        self.boundary_quadratures = {}
-        self.pxi = np.diag(self.sbp_xi.P.todense())
-        self.peta = np.diag(self.sbp_eta.P.todense())
-
-        dx_deta_w = grid2d.get_function_boundary(self.dx_deta, 'w')
-        dy_deta_w = grid2d.get_function_boundary(self.dy_deta, 'w')
-        self.boundary_quadratures['w'] = \
-                self.peta*np.sqrt(dx_deta_w**2 + dy_deta_w**2)
-
-        dx_deta_e = grid2d.get_function_boundary(self.dx_deta, 'e')
-        dy_deta_e = grid2d.get_function_boundary(self.dy_deta, 'e')
-        self.boundary_quadratures['e'] = \
-                self.peta*np.sqrt(dx_deta_e**2 + dy_deta_e**2)
-
-        dx_dxi_s = grid2d.get_function_boundary(self.dx_dxi, 's')
-        dy_dxi_s = grid2d.get_function_boundary(self.dy_dxi, 's')
-        self.boundary_quadratures['s'] = \
-                self.pxi*np.sqrt(dx_dxi_s**2 + dy_dxi_s**2)
-
-        dx_dxi_n = grid2d.get_function_boundary(self.dx_dxi, 'n')
-        dy_dxi_n = grid2d.get_function_boundary(self.dy_dxi, 'n')
-        self.boundary_quadratures['n'] = \
-                self.pxi*np.sqrt(dx_dxi_n**2 + dy_dxi_n**2)
+        self.boundary_quadratures['w'] = self.peta
+        self.boundary_quadratures['e'] = self.peta
+        self.boundary_quadratures['s'] = self.pxi
+        self.boundary_quadratures['n'] = self.pxi
         
         # Construct P^(-1) at boundaries.
         self.pinv = {}

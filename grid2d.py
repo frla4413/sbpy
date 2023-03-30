@@ -35,6 +35,16 @@ from sbpy import operators
 
 _SIDES = ['s', 'e', 'n', 'w']
 
+def flatten_multiblock_vector(vec):
+    """Concatenates a gridfunction. Must be used if the blocks are of different shapes."""
+    return np.concatenate([ u.flatten() for u in vec])
+
+def allocate_gridfunction(grid):
+    """Allocate a gridfunction on a multiblockgrid with different shapes on the blocks."""
+    out = []
+    for shape in grid.get_shapes():
+        out.append(np.zeros(shape))
+    return out
 
 def collocate_corners(blocks, tol=1e-15):
     """ Collocate corners of blocks if they are equal up to some tolerance. """
@@ -43,9 +53,6 @@ def collocate_corners(blocks, tol=1e-15):
             if np.abs(X1[c1]-X2[c2]) < tol and np.abs(Y1[c1]-Y2[c2]) < tol:
                 X1[c1] = X2[c2]
                 Y1[c1] = Y2[c2]
-
-
-
 
 def get_boundary(X,Y,side):
     """ Returns the boundary of a block. """
@@ -85,7 +92,6 @@ def get_corners(X,Y):
                      [X[-1,0] , Y[-1,0] ],
                      [X[-1,-1], Y[-1,-1]],
                      [X[0,-1] , Y[0,-1]]])
-
 
 def get_center(X,Y):
     """ Returns the center point of a block. """
@@ -211,10 +217,9 @@ class MultiblockGrid:
         # Save boundary slices
         self.bd_slice_dicts = \
                 [{'s': (slice(Nx), 0),
-                 'e': (-1, slice(Ny)),
-                 'n': (slice(Nx), -1),
-                 'w': (0, slice(Ny))} for (Nx,Ny) in self.shapes]
-
+                  'e': (-1, slice(Ny)),
+                  'n': (slice(Nx), -1),
+                  'w': (0, slice(Ny))} for (Nx,Ny) in self.shapes]
 
     def evaluate_function(self, f):
         """ Evaluates a (vectorized) function on the grid. """
@@ -532,7 +537,7 @@ class MultiblockSBP:
     def diffx(self, U):
         """ Differentiates a Multiblock function with respect to x. """
         return np.array([ sbp.diffx(u) for
-            sbp,u in zip(self.sbp_ops, U) ])
+                          sbp,u in zip(self.sbp_ops, U) ])
 
 
     def diffy(self, U):

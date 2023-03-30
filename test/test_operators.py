@@ -1,6 +1,5 @@
 import unittest
 
-import pdb
 import numpy as np
 import sbpy.operators
 from sbpy import grid2d
@@ -8,14 +7,13 @@ from sbpy import grid2d
 class Test1DOperators(unittest.TestCase):
 
     def setUp(self):
-        self.N = 10
+        self.N = 100
         self.x = np.linspace(0, 1, self.N)
         self.dx = 1/(self.N-1)
-        self.sbp_op = sbpy.operators.SBP1D(self.N, self.dx,accuracy = 2)
+        self.sbp_op = sbpy.operators.SBP1D(self.N, self.dx)
         self.D = self.sbp_op.D
         self.P = self.sbp_op.P
         self.Q = self.sbp_op.Q
-        pdb.set_trace()
 
 
     def test_differential_accuracy(self):
@@ -26,8 +24,8 @@ class Test1DOperators(unittest.TestCase):
 
     def test_integral_accuracy(self):
         tol = 1e-14
-        self.assertTrue(np.abs(sum(self.P@self.x) - 0.5) < tol)
-        self.assertTrue(np.abs(sum(self.P@np.ones(self.N)) - 1.0) < tol)
+        self.assertTrue(np.max(np.abs(sum(self.P@self.x) - 0.5)) < tol)
+        self.assertTrue(np.max(np.abs(sum(self.P@np.ones(self.N)) - 1.0)) < tol)
 
 
     def test_sbp_property(self):

@@ -4,28 +4,27 @@ import pdb
 import itertools
 import numpy as np
 from sbpy import grid2d
-from matplotlib import rc,cm
-import matplotlib.pyplot as plt
 
 def get_gauss_initial_data(X, Y, cx, cy):
-    rv1 = np.random.multivariate_normal([cx,cy], 0.01*np.eye(2), size=X.shape)
-    gauss_bell = rv1 #(np.dstack((X,Y)))
-    normalize = np.max(gauss_bell.flatten())
+    """
+    Use to produce initial data formed as gaussian pulse in u
+    v,p are constant zeros
+
+    Parameter: 
+        X,Y:    grid points
+        cx,cy:  center points of the pulse
+    Output: 
+        u,v,p
+
+    """
+    rv1 = multivariate_normal([cx,cy], 0.01*np.eye(2))
+    gauss_bell = rv1.pdf(np.dstack((X,Y)))
+    normalize = rv1.pdf(np.dstack((cx,cy)))
     initu = 2*np.array([gauss_bell])/normalize
-    #initu = np.array([np.sin(2*np.pi*X)*np.sin(2*np.pi*Y)])
     initv = np.array([np.zeros(X.shape)])
     initp = np.array([np.ones(X.shape)])
 
     return initu, initv, initp
-
-
-def nice_plot(x, y, **kwargs):
-
-    plt.rcParams['legend.loc'] = 'best'
-    plt.rcParams['font.size'] = 40
-    plt.plot(x,y,**kwargs)
-    if 'label' in kwargs:
-        plt.legend()
 
 
 def create_convergence_table(labels, errors, h, title=None, filename=None):
@@ -83,105 +82,6 @@ def create_convergence_table(labels, errors, h, title=None, filename=None):
             f.write("\\end{tabular}\n\n")
 
 
-def get_circle_sector_grid(N, th0, th1, r_inner, r_outer):
-    """ Returns a circle sector grid.
-
-    Arguments:
-        N: Number of gridpoints in each direction.
-        th0: Start angle.
-        th1: End angle.
-        r_inner: Inner radius.
-        r_outer: Outer radius.
-
-    Returns:
-        (X,Y): A pair of matrices defining the grid.
-    """
-    d_r = (r_outer - r_inner)/(N-1)
-    d_th = (th1-th0)/(N-1)
-
-    radii = np.linspace(r_inner, r_outer, N)
-    thetas = np.linspace(th0, th1, N)
-
-    x = np.zeros(N*N)
-    y = np.zeros(N*N)
-
-    pos = 0
-    for r in radii:
-        for th in thetas:
-            x[pos] = r*np.cos(th)
-            y[pos] = r*np.sin(th)
-            pos += 1
-
-    X = np.reshape(x,(N,N))
-    Y = np.reshape(y,(N,N))
-
-    return X,Y
-
-
-def get_annulus_grid(N):
-    """ Returns a list of four blocks constituting an annulus grid. """
-    blocks = [get_circle_sector_grid(N, 0, 0.5*np.pi, 0.2, 1.0),
-              get_circle_sector_grid(N, 0.5*np.pi, np.pi, 0.2, 1.0),
-              get_circle_sector_grid(N, np.pi, 1.5*np.pi, 0.2, 1.0),
-              get_circle_sector_grid(N, 1.5*np.pi, 2*np.pi, 0.2, 1.0)]
-    grid2d.collocate_corners(blocks)
-    return blocks
-
-
-def get_bump_grid(N):
-    """ Returns a grid with two bumps in the floor and ceiling.
-    Arguments:
-        N: Number of gridpoints in each direction.
-
-    Returns:
-        (X,Y): A pair of matrices defining the grid.
-    """
-    x0 = -1.5
-    x1 = 1.5
-    dx = (x1-x0)/(N-1)
-    y0 = lambda x: 4*0.0625*np.exp(-25*x**2)
-    y1 = lambda x: 0.8 - 4*0.0625*np.exp(-25*x**2)
-    x = np.zeros(N*N)
-    y = np.copy(x)
-    pos = 0
-    for i in range(N):
-        for j in range(N):
-            x_val = x0 + i*dx
-            x[pos] = x_val
-            y[pos] = y0(x_val) + j*(y1(x_val)-y0(x_val))/(N-1)
-            pos = pos+1
-
-    X = np.reshape(x,(N,N))
-    Y = np.reshape(y,(N,N))
-
-    return X,Y
-
-def get_channel_grid(N, x0 = 0, x1 = 1):
-    """ Returns a grid with curved floor and ceiling.
-    Arguments:
-        N: Number of gridpoints in each direction.
-
-    Returns:
-        (X,Y): A pair of matrices defining the grid.
-    """
-    dx = (x1-x0)/(N-1)
-    y0 = lambda x: -1 - 0.5*np.arctan(x + 3) 
-    y1 = lambda x: 1 #+ 0.3*np.arctan(x + 3)
-    x = np.zeros(N*N)
-    y = np.copy(x)
-    pos = 0
-    for i in range(N):
-        for j in range(N):
-            x_val = x0 + i*dx
-            x[pos] = x_val
-            y[pos] = y0(x_val) + j*(y1(x_val)-y0(x_val))/(N-1)
-            pos = pos+1
-
-    X = np.reshape(x,(N,N))
-    Y = np.reshape(y,(N,N))
-
-    return X,Y
-
 
 def fetch_highres_data(coarse_grid, coarse_indices, fine_grid,
                        fine_data, stride):
@@ -213,7 +113,7 @@ def fetch_highres_data(coarse_grid, coarse_indices, fine_grid,
 
 def boundary_layer_selection(grid, bd_indices, n):
     """ Returns a list of indices of the n closest slices of interior nodes to
-        the fupplied boundaries. Use grid.plot_domain(boundary_indices=True) to
+        the supplied boundaries. Use grid.plot_domain(boundary_indices=True) to
         view the boundary indices of your grid.
 
     Arguments:
@@ -249,31 +149,45 @@ def is_interactive():
     import __main__ as main
     return not hasattr(main, '__file__')
 
-def surf_plot(X,Y,Z, title = None):
 
-    fig,ax = plt.subplots(figsize=(11,11), subplot_kw={"projection":"3d"})
-    fig = ax.plot_surface(X, Y, Z, cmap=cm.jet,
-                   linewidth=0, antialiased=False)
-    plt.show()
+def solution_to_file(grid,U,V,P,name_base):
 
+    for i in range(len(U)):
+        filename = name_base+str(i)
+        export_to_tecplot(grid,U[i],V[i],P[i],filename)
 
-def export_to_tecplot(grid,U,V,P,filename):
-    blocks = grid.get_blocks()
+def export_to_tecplot(sbp,U,V,P,filename):
+    blocks = sbp.grid.get_blocks()
 
+    divu = sbp.diffx(U) + sbp.diffy(V)
+    filename = filename +'.tec'
     with open(filename,'w') as f:
         f.write('TITLE = "incompressible_navier_stokes_solution.tec"\n')
-        f.write('VARIABLES = "x","y","u","v","p"\n')
+        f.write('VARIABLES = "x","y","u","v","p","div"\n')
 
         for k in range(len(blocks)):
             X = blocks[k][0]
             Y = blocks[k][1]
-
             f.write('ZONE I = ' + str(X.shape[1])+ \
                     ', J = ' + str(X.shape[0])+ ', F = POINT\n')
-            for j in range(X.shape[1]):
-                for i in range(X.shape[0]):
-                    my_str = str(X[i,j]) + ' ' + str(Y[i,j]) +\
-                            ' ' + str(U[i,j]) + ' ' + str(V[i,j]) +\
-                            ' ' + str(P[i,j]) + '\n'
+
+            u = U[k].flatten()
+            v = V[k].flatten()
+            p = P[k].flatten()
+            div = divu[k].flatten()
+
+            x = X.flatten()
+            y = Y.flatten()
+            for i in range(X.shape[1]*X.shape[0]):
+                    my_str = str(x[i]) + ' ' + str(y[i]) +\
+                            ' ' + str(u[i]) + ' ' + str(v[i]) +\
+                            ' ' + str(p[i]) + ' ' + str(div[i]) +'\n'
                     f.write(my_str)
+
+#            for j in range(X.shape[1]):
+#                for i in range(X.shape[0]):
+#                    my_str = str(X[i,j]) + ' ' + str(Y[i,j]) +\
+#                            ' ' + str(U[k][i,j]) + ' ' + str(V[k][i,j]) +\
+#                            ' ' + str(P[k][i,j]) + '\n'
+#                    f.write(my_str)
         f.close()
