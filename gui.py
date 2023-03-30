@@ -12,6 +12,7 @@ from matplotlib import path
 from matplotlib import patches
 from sbpy import grid2d
 from sbpy import utils
+from meshes import get_circle_sector_grid
 
 
 class NodeSelector:
@@ -113,10 +114,10 @@ class NodeSelector:
 
 if __name__ == '__main__':
     N = 21
-    blocks = [utils.get_circle_sector_grid(N, 0, 0.5*np.pi, 0.2, 1.0),
-              utils.get_circle_sector_grid(N, 0.5*np.pi, np.pi, 0.2, 1.0),
-              utils.get_circle_sector_grid(N, np.pi, 1.5*np.pi, 0.2, 1.0),
-              utils.get_circle_sector_grid(N, 1.5*np.pi, 2*np.pi, 0.2, 1.0)]
+    blocks = [get_circle_sector_grid(N, 0, 0.5*np.pi, 0.2, 1.0),
+              get_circle_sector_grid(N, 0.5*np.pi, np.pi, 0.2, 1.0),
+              get_circle_sector_grid(N, np.pi, 1.5*np.pi, 0.2, 1.0),
+              get_circle_sector_grid(N, 1.5*np.pi, 2*np.pi, 0.2, 1.0)]
     grid2d.collocate_corners(blocks)
     coarse_grid = grid2d.MultiblockGridSBP(blocks, accuracy=4)
     selector = NodeSelector(coarse_grid)
@@ -124,10 +125,10 @@ if __name__ == '__main__':
 
 
     N = 41
-    blocks = [utils.get_circle_sector_grid(N, 0, 0.5*np.pi, 0.2, 1.0),
-              utils.get_circle_sector_grid(N, 0.5*np.pi, np.pi, 0.2, 1.0),
-              utils.get_circle_sector_grid(N, np.pi, 1.5*np.pi, 0.2, 1.0),
-              utils.get_circle_sector_grid(N, 1.5*np.pi, 2*np.pi, 0.2, 1.0)]
+    blocks = [get_circle_sector_grid(N, 0, 0.5*np.pi, 0.2, 1.0),
+              get_circle_sector_grid(N, 0.5*np.pi, np.pi, 0.2, 1.0),
+              get_circle_sector_grid(N, np.pi, 1.5*np.pi, 0.2, 1.0),
+              get_circle_sector_grid(N, 1.5*np.pi, 2*np.pi, 0.2, 1.0)]
     grid2d.collocate_corners(blocks)
     fine_grid = grid2d.MultiblockGridSBP(blocks, accuracy=4)
 

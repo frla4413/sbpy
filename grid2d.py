@@ -24,18 +24,19 @@ import itertools
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib import rc,cm
+from matplotlib import rc
 from scipy import sparse
 
 rc('text', usetex=True)
 
-from sbpy import operators
+from sbpy import operators, dg_operators
 
 
 _SIDES = ['s', 'e', 'n', 'w']
+_TYPE  = float
 
 
-def collocate_corners(blocks, tol=1e-15):
+def collocate_corners(blocks, tol=1e-13):
     """ Collocate corners of blocks if they are equal up to some tolerance. """
     for ((X1,Y1),(X2,Y2)) in itertools.combinations(blocks,2):
         for (c1,c2) in itertools.product([(0,0),(-1,0),(-1,-1),(0,-1)], repeat=2):
@@ -364,7 +365,7 @@ class MultiblockGrid:
             for side in {'w', 'e', 's', 'n'}:
                 x,y = get_boundary(X,Y,side)
                 ax.plot(x,y,'k',linewidth=3)
-                ax.text(np.mean(x),np.mean(y),side)
+                ax.text(np.mean(x),np.mean(y),side,size=18)
 
         ax.axis('equal')
         plt.show()
@@ -407,8 +408,8 @@ class MultiblockGrid:
             ax.fill(x_poly,y_poly,'tab:gray')
             ax.plot(x_poly,y_poly,'k')
             c = get_center(X,Y)
-            ax.text(c[0], c[1], "$\Omega_" + str(k) + "$", fontsize=20,
-                    fontweight='bold')
+            #ax.text(c[0], c[1], "$\Omega_" + str(k) + "$", fontsize=20,
+            #        fontweight='bold')
 
         # Draw boundary indices
         if boundary_indices:
@@ -432,16 +433,6 @@ class MultiblockGrid:
                         fontweight='bold')
 
         ax.axis('equal')
-        plt.show()
-
-    def plot_grid_function(self, F):
-        ''' Plot a grid function on a single block (block 0) '''
-
-        fig = plt.figure()
-        ax = fig.gca(projection='3d')
-        X,Y = self.get_blocks()[0]
-        surf = ax.plot_surface(X, Y, F, cmap=cm.jet,
-                       linewidth=0, antialiased=False)
         plt.show()
 
 
@@ -495,7 +486,7 @@ class MultiblockSBP:
         Args:
             grid: A MultiblockGrid object.
         Optional:
-            accuracy: The interior accuracy of the difference operators (2 or 4).
+            accuracy: The interior accuracy of the difference operators (2,4 or 8).
         """
 
         self.grid = grid
@@ -509,13 +500,13 @@ class MultiblockSBP:
     def diffx(self, U):
         """ Differentiates a Multiblock function with respect to x. """
         return np.array([ sbp.diffx(u) for
-            sbp,u in zip(self.sbp_ops, U) ])
+            sbp,u in zip(self.sbp_ops, U) ],dtype=_TYPE)
 
 
     def diffy(self, U):
         """ Differentiates a Multiblock function with respect to y. """
         return np.array([ sbp.diffy(u) for
-                          sbp,u in zip(self.sbp_ops, U) ])
+                          sbp,u in zip(self.sbp_ops, U) ],dtype=_TYPE)
 
 
     def integrate(self, U):
@@ -563,7 +554,6 @@ class MultiblockSBP:
         return self.sbp_ops[block_idx].Dy
 
 
-
 class MultiblockGridSBP(MultiblockGrid):
     """ A class combining MultiblockGrid functionality and SBP2D functionality.  """
 
@@ -607,6 +597,81 @@ class MultiblockGridSBP(MultiblockGrid):
         """ Returns a list of SBP2D objects associated to each block. """
         return self.sbp_ops
 
+class MultiblockDGSBP:
+    """ A class combining MultiblockGrid functionality and SBP2D functionality.  """
+
+    def __init__(self, grid):
+        """ Initializes a MultiblockSBP object.
+        Args:
+            grid: A MultiblockGrid object.
+        Optional:
+            accuracy: The interior accuracy of the difference operators (2,4 or 8).
+        """
+
+        self.grid = grid
+
+        # Create SBP2D objects for each block.
+        self.sbp_ops = []
+        for (X,Y) in self.grid.get_blocks():
+            self.sbp_ops.append(dg_operators.DGSBP2D(X,Y))
+
+
+    def diffx(self, U):
+        """ Differentiates a Multiblock function with respect to x. """
+        return np.array([ sbp.diffx(u) for
+            sbp,u in zip(self.sbp_ops, U) ],dtype=_TYPE)
+
+
+    def diffy(self, U):
+        """ Differentiates a Multiblock function with respect to y. """
+        return np.array([ sbp.diffy(u) for
+                          sbp,u in zip(self.sbp_ops, U) ],dtype=_TYPE)
+
+
+    def integrate(self, U):
+        """ Integrates a Multiblock function over the domain. """
+        return sum([ sbp.integrate(u) for
+                     sbp,u in zip(self.sbp_ops, U) ])
+
+
+    def get_normals(self, block_idx, side):
+        """ Get the normals of a specified side of a particular block. """
+        return self.sbp_ops[block_idx].normals[side]
+
+
+    def get_pinv(self, block_idx, side):
+        """ Get the inverse of the volume quadrature at a specified side
+        of a particular block. """
+        return self.sbp_ops[block_idx].pinv[side]
+
+    def get_boundary_quadrature(self, block_idx, side):
+        """ Get the boundary quadrature at a specified side of a particular
+        block. """
+        return self.sbp_ops[block_idx].boundary_quadratures[side]
+
+    def get_full_P(self, block_idx):
+        """ Get the boundary quadrature of a particular block. """
+        return self.sbp_ops[block_idx].P
+
+    def get_full_pinv(self, block_idx):
+        """ Get the boundary quadrature of a particular block. """
+        return self.sbp_ops[block_idx].Pinv
+
+
+    def get_sbp_ops(self):
+        """ Returns a list of SBP2D objects associated to each block. """
+        return self.sbp_ops
+
+
+    def get_Dx(self, block_idx):
+        """ Get Dx for a given block. """
+        return self.sbp_ops[block_idx].Dx
+
+
+    def get_Dy(self, block_idx):
+        """ Get Dy for a given block. """
+        return self.sbp_ops[block_idx].Dy
+
 
 def load_p3d(filename):
     with open(filename) as data:
@@ -635,6 +700,4 @@ def load_p3d(filename):
             #Y.append(np.array(Y_cur))
             for _ in range(Nx[k]):
                 next(data)
-
-
     return blocks

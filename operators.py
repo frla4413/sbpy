@@ -71,10 +71,9 @@ class SBP1D:
             
         if accuracy == 8:
             # from sbp_opmod.m
-            Nx = N+1
+            Nx = N
             p_block = np.array([1498139/5080320, 1107307/725760, 
-                               20761/80640, 1304999/725760, 
-                               299527/725760, 103097/80640,
+                               20761/80640, 1304999/725760, 299527/725760, 103097/80640,
                                670091/725760, 5127739/5080320])
             
             p     = dx*np.concatenate([p_block,np.ones(Nx-16),p_block[::-1]])
@@ -260,7 +259,7 @@ class SBP2D:
 
         """
         assert(X.shape == Y.shape)
-        assert(accuracy in [2,4])
+        assert(accuracy in [2,4,8])
 
         self.X = X
         self.Y = Y
