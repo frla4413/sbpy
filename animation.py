@@ -1,60 +1,70 @@
-""" This module contains visualization tools for PDE solutions. """
+import pdb
 
-import itertools
 import numpy as np
-from mayavi import mlab
+import matplotlib.pyplot as plt
+from matplotlib import animation
+from matplotlib.cm import ScalarMappable
+
+def animate_pressure(grid, P, dt):
+    nt = len(P)
+    fig, ax = plt.subplots(1,1)
+    X,Y = grid.get_block(0)
+    plot = ax.pcolormesh(X,Y,P[0])
+
+    def update(num, pressure_plot):
+        p = P[num%nt]
+        pressure_plot = ax.pcolormesh(X,Y,p)
+        print("t = {:.2f}".format((num%nt)*dt), end='\r')
+
+        return pressure_plot,
+
+    anim = animation.FuncAnimation(fig, update, fargs=(plot,), interval=1000*dt, blit = True)
+    plt.show()
 
 
-def animate_multiblock(grid, F, **kwargs):
-    """ Animates a list of multiblock functions.
+def animate_velocity(grid, U, V, dt):
+    nt = len(U)
+    fig, ax = plt.subplots(1,1)
+    X,Y = grid.get_block(0)
+    plot = ax.quiver(X,Y,U[0],V[0])
 
-    Arguments:
-        F: A list of multiblock functions.
+    def update(num, plot):
+        u = U[num%nt]
+        v = V[num%nt]
+        plot.set_UVC(u,v)
+        print("t = {:.2f}".format((num%nt)*dt), end='\r')
 
-    Optional:
-        fps: A positive integer representing the number of frames per second
-        stored in F.
-        stride: A positive integer representing the stride length in the data.
-            By default stride = 1, but for high resolution grids consider
-            increasing the stride for efficient rendering.
+        return plot,
 
-    """
-
-    if 'fps' in kwargs:
-        fps = kwargs['fps']
-    else:
-        fps = 30
-
-    if 'stride' in kwargs:
-        stride = kwargs['stride']
-    else:
-        stride = 1
-
-    Fmin = np.min(np.array(F))
-    Fmax = np.max(np.array(F))
-    xmin = np.min(np.array([X for X,Y in grid.get_blocks()]))
-    xmax = np.max(np.array([X for X,Y in grid.get_blocks()]))
-    ymin = np.min(np.array([Y for X,Y in grid.get_blocks()]))
-    ymax = np.max(np.array([Y for X,Y in grid.get_blocks()]))
-    surfaces = [ mlab.mesh(X[::stride, ::stride],
-                           Y[::stride, ::stride],
-                           Z[::stride, ::stride],
-                           vmax = Fmax, vmin = Fmin) for ((X,Y),Z) in
-                 zip(grid.get_blocks(), F[0]) ]
+    anim = animation.FuncAnimation(fig, update, fargs=(plot,), interval=1000*dt, blit = True)
+    plt.show()
 
 
-    @mlab.animate(delay=int(1000/fps))
-    def anim():
-        for f in itertools.cycle(F):
-            for (s,f_block) in zip(surfaces, f):
-                s.mlab_source.trait_set(scalars=f_block[::stride, ::stride])
-                s.mlab_source.trait_set(z=f_block[::stride, ::stride])
-            yield
+def animate_solution(grid, U, V, P, dt):
+    nt = len(U)
+    fig, ax = plt.subplots(1,1)
+    X,Y = grid.get_block(0)
+    p_plot = ax.pcolormesh(X,Y,P[0])
+    w_plot = ax.quiver(X,Y,U[0],V[0])
+    p_min = np.min(np.array(P).flatten())
+    p_max = np.max(np.array(P).flatten())
+    p_plot.set_clim([p_min, p_max])
+    fig.colorbar(p_plot, ax=ax)
 
-    mlab.axes(x_axis_visibility = False,
-              y_axis_visibility = False,
-              z_axis_visibility = False,
-              extent=[xmin,xmax,ymin,ymax,Fmin,Fmax])
+    def update(num, p_plot, w_plot):
+        u = U[num%nt]
+        v = V[num%nt]
+        p = P[num%nt]
 
-    frame_gen = anim()
-    mlab.show()
+        p_min = np.min(np.array(p).flatten())
+        p_max = np.max(np.array(p).flatten())
+        p_plot.set_clim([p_min, p_max])
+        p_plot.set_array(p[:-1,:-1].ravel())
+        w_plot.set_UVC(u,v)
+        print("t = {:.2f}".format((num%nt)*dt), end='\r')
+
+        return p_plot, w_plot
+
+    anim = animation.FuncAnimation(fig, update, fargs=(p_plot, w_plot), interval=1000*dt, blit = True)
+    plt.show()
+
