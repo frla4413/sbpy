@@ -1,0 +1,6 @@
+require
+numpy-1.22.1
+matplotlib
+scipy-1.7.3
+tqdm-4.62.3
+pylint
