@@ -91,7 +91,7 @@ class SBP1D:
             
         if accuracy == 8:
             # from sbp_opmod.m
-            Nx = N
+            Nx = N+1
             p_block = np.array([1498139/5080320, 1107307/725760, 
                                20761/80640, 1304999/725760, 
                                299527/725760, 103097/80640,
@@ -415,9 +415,7 @@ class SBP2D:
 
 
 class SBP2DPeriodic:
-    """ Class representing 2D finite difference SBP operators. 
-        This is a limited version for square domains with periodicity in the 
-        y-direction.
+    """ Class representing 2D finite difference SBP operators.
 
     This class defines 2D curvilinear SBP operators on a supplied grid X, Y,
     based on Ålund & Nordström (JCP, 2019).  Here X and Y are 2D numpy arrays
@@ -447,8 +445,7 @@ class SBP2DPeriodic:
 
         """
         assert(X.shape == Y.shape)
-        assert(accuracy_y in [2])
-        assert(accuracy_x in [2,4,8])
+        assert(accuracy_x and accuracy_y in [2,4,8])
 
         self.X = X
         self.Y = Y
@@ -462,16 +459,10 @@ class SBP2DPeriodic:
                              accuracy_x, periodic = False)
         self.sbp_eta = SBP1D(self.Ny, (y[-1] - y[0])/(self.Ny-1), 
                              accuracy_y, periodic = True)
-        
-        self.sides   = { 'w': np.array([[x,y] for x,y in zip(X[0,:], Y[0,:])]),
-                         'e': np.array([[x,y] for x,y in zip(X[-1,:], Y[-1,:])]),
-                         's': np.array([[x,y] for x,y in zip(X[:,0], Y[:, 0])]),
-                         'n': np.array([[x,y] for x,y in zip(X[:,-1], Y[:,-1])])}
 
         # Construct 2D SBP operators.
         self.Dx = sparse.kron(self.sbp_xi.D, self.Iy)
         self.Dy = sparse.kron(self.Ix, self.sbp_eta.D)
-        
         self.P = sparse.kron(self.sbp_xi.P, self.sbp_eta.P)
         self.Pinv = sparse.diags(1/self.P.data)
 
@@ -486,12 +477,10 @@ class SBP2DPeriodic:
 
         self.boundary_quadratures['w'] = self.peta
         self.boundary_quadratures['e'] = self.peta
-        self.boundary_quadratures['s'] = self.pxi
-        self.boundary_quadratures['n'] = self.pxi
         
         # Construct P^(-1) at boundaries.
         self.pinv = {}
-        for side in ['s','e','n','w']:
+        for side in ['e','w']:
             self.pinv[side] = 1/grid2d.get_function_boundary(
                     np.outer(self.pxi, self.peta), side)
 
@@ -503,12 +492,6 @@ class SBP2DPeriodic:
         self.normals['e'] = \
             np.array([ np.array([nx, -ny])/np.linalg.norm([nx, ny]) for
               (nx,ny) in zip(np.ones(self.Ny), np.zeros(self.Ny)) ])
-        self.normals['s'] = \
-            np.array([ np.array([nx, -ny])/np.linalg.norm([nx, ny]) for
-             (nx,ny) in zip(np.zeros(self.Nx), np.ones(self.Nx)) ])
-        self.normals['n'] = \
-            np.array([ np.array([-nx, ny])/np.linalg.norm([nx, ny]) for
-             (nx,ny) in zip(np.zeros(self.Nx), np.ones(self.Nx)) ])
 
 
     def plot(self):

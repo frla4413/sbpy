@@ -1,387 +1,66 @@
 import unittest
 
+import pdb
+import scipy
 from scipy.stats import multivariate_normal
 import numpy as np
 import matplotlib.pyplot as plt
 
-from sbpy.utils import get_circle_sector_grid, get_bump_grid
+from sbpy.utils import get_circle_sector_grid, get_bump_grid, create_convergence_table, solution_to_tec
 from sbpy.grid2d import MultiblockGrid, MultiblockSBP, get_center
-from sbpy.euler.animation import animate_pressure, animate_velocity, animate_solution
-from euler import euler_operator, wall_operator, outflow_operator, pressure_operator, inflow_operator, outflow_operator, pressure_inflow_operator, solve
+from euler import euler_operator, wall_operator, solve, outflow_operator, interior_penalty_operator_w
+from sbpy.artificial_dissipation_operators import generate_artificial_dissipation_matrix_2D
 
 
 def get_gauss_initial_data(X, Y, cx, cy):
-    rv1 = multivariate_normal([cx,cy], 0.01*np.eye(2))
-    gauss_bell = rv1.pdf(np.dstack((X,Y)))
-    normalize = np.max(gauss_bell.flatten())
-    initu = 2*np.array([gauss_bell])/normalize
+    gauss_bell = np.array([np.exp(-10*(X-cx)**2)])
+    initu = gauss_bell*np.array([np.exp(-10*(Y-cy)**2)])
     initv = np.array([np.zeros(X.shape)])
+    initw = np.array([np.zeros(X.shape)])
     initp = np.array([np.ones(X.shape)])
+    return initu, initv, initw, initp
 
-    return initu, initv, initp
-
-
-def bump_const_inflow_pressure_outflow(
-        N = 50,
+def square_cavity_flow_polar_coordinates(
+        N = 30,
         num_timesteps = 10,
-        dt = 0.01):
+        dt = 0.1):
 
-    X,Y = get_bump_grid(N)
-    grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-    initu = np.array([np.ones(X.shape)])
-    initv = np.array([np.zeros(X.shape)])
-    initp = np.array([np.ones(X.shape)])
-    plt.quiver(X,Y,initu[0],initv[0])
-    plt.show()
-
-    def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              inflow_operator(sbp, state, 0, 'w', -1, 0) + \
-              pressure_operator(sbp, state, 0, 'e') + \
-              wall_operator(sbp, state, 0, 's') + \
-              wall_operator(sbp, state, 0, 'n')
-
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-def bump_pressure_inflow_pressure_outflow(
-        N = 20,
-        num_timesteps = 50,
-        dt = 0.01):
-
-    #X,Y = get_bump_grid(N)
-    x = np.linspace(0,1,N)
-    [X,Y] = np.meshgrid(x,x)
+    (X,Y) = np.meshgrid(np.linspace(0,3,N), np.linspace(0,2*np.pi,N))
     X = np.transpose(X)
     Y = np.transpose(Y)
+    X = X[:,:-1]
+    Y = Y[:,:-1]
     grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-    rv1 = multivariate_normal([0.8,0.5], 0.001*np.eye(2))
-    gauss_bell = rv1.pdf(np.dstack((X,Y)))
-    normalize = np.max(gauss_bell.flatten())
-    initu = 1 + 2*np.array([gauss_bell])/normalize
-
-    #initu = np.array([np.ones(X.shape)])
-    initv = np.array([np.zeros(X.shape)])
-    initp = np.array([np.zeros(X.shape)])
+    sbp = MultiblockSBP(grid,periodic=True)
+    initu, initv, initw, initp = get_gauss_initial_data(X, Y, 1, np.pi)
+#    initu = initv
+#    initv = [X*10*np.exp(-30*(1-X)**2)*np.sin(Y)]
     plt.quiver(X,Y,initu[0],initv[0])
     plt.show()
+#    art_diss_matrix = generate_artificial_dissipation_matrix_2D(grid, alpha = 10)
+#    art_diss_matrix = scipy.sparse.kron(scipy.sparse.eye(4), art_diss_matrix)
 
     def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              pressure_inflow_operator(sbp, state, 0, 'w', 0.5, -1) + \
-              pressure_operator(sbp, state, 0, 'e') + \
-              wall_operator(sbp, state, 0, 's') + \
-              wall_operator(sbp, state, 0, 'n')
+        L,J = euler_operator(sbp, state) + \
+            wall_operator(sbp, state, 0, 'e') +\
+            interior_penalty_operator_w(sbp, state, 0)
+#            outflow_operator(sbp, state, 0, 's') +\
+#            outflow_operator(sbp, state, 0, 'n') +\
+#        return L
+#        L+= art_diss_matrix@state
+#        J+= art_diss_matrix
+        return np.array([L, J], dtype=object)
+
+    filename = "sol/sol"
+    U,V,W,P = solve(grid, spatial_op, initu,
+                    initv, initw, initp, dt, num_timesteps, filename)
+
+    return grid,U,V,W,P,dt
 
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-def bump_const_inflow_pressure_outflow(
-        N = 30,
-        num_timesteps = 10,
-        dt = 0.1):
-
-    X,Y = get_bump_grid(N)
-    grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-    initu = np.array([np.ones(X.shape)])
-    initv = np.array([np.zeros(X.shape)])
-    initp = np.array([np.ones(X.shape)])
-    plt.quiver(X,Y,initu[0],initv[0])
-    plt.show()
-
-
-    def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              inflow_operator(sbp, state, 0, 'w', -1, 0) + \
-              pressure_operator(sbp, state, 0, 'e') + \
-              wall_operator(sbp, state, 0, 's') + \
-              wall_operator(sbp, state, 0, 'n')
-
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-def bump_const_inflow_pressure_outflow_2(
-        N = 30,
-        num_timesteps = 10,
-        dt = 0.1):
-
-    X,Y = get_bump_grid(N)
-    grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-    initu = np.array([np.ones(X.shape)])
-    initv = np.array([np.zeros(X.shape)])
-    initp = np.array([np.zeros(X.shape)])
-
-    initu, initv, initp = get_gauss_initial_data(X,Y,0,0.4)
-    plt.quiver(X,Y,initu[0],initv[0])
-    plt.show()
-
-
-    def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              inflow_operator(sbp, state, 0, 'w',-1,0) + \
-              outflow_operator(sbp, state, 0, 'e',0) + \
-              outflow_operator(sbp, state, 0, 's',0) + \
-              outflow_operator(sbp, state, 0, 'n',0) 
-              #wall_operator(sbp, state, 0, 's') + \
-              #wall_operator(sbp, state, 0, 'n')
-
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-def bump_const_inflow_pressure_speed_outflow(
-        N = 30,
-        num_timesteps = 10,
-        dt = 0.1):
-
-    X,Y = get_bump_grid(N)
-    grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-    initu = np.array([np.ones(X.shape)])
-    initv = np.array([np.zeros(X.shape)])
-    initp = np.array([np.ones(X.shape)])
-    plt.quiver(X,Y,initu[0],initv[0])
-    plt.show()
-
-
-    def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              inflow_operator(sbp, state, 0, 'w', -1, 0) + \
-              outflow_operator(sbp, state, 0, 'e') + \
-              wall_operator(sbp, state, 0, 's') + \
-              wall_operator(sbp, state, 0, 'n')
-
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-
-def bump_walls_and_pressure_speed_outflow(
-        N = 30,
-        num_timesteps = 10,
-        dt = 0.1):
-
-    X,Y = get_bump_grid(N)
-    grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-    initu, initv, initp = get_gauss_initial_data(X,Y,-0.5,0.4)
-    plt.quiver(X,Y,initu[0],initv[0])
-    plt.show()
-
-
-    def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              wall_operator(sbp, state, 0, 'w') + \
-              outflow_operator(sbp, state, 0, 'e') + \
-              wall_operator(sbp, state, 0, 's') + \
-              wall_operator(sbp, state, 0, 'n')
-
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-
-def square_walls_and_pressure_speed_outflow(
-        N = 30,
-        num_timesteps = 10,
-        dt = 0.1):
-
-    (X,Y) = np.meshgrid(np.linspace(0,1,N), np.linspace(0,1,N))
-    X = np.transpose(X)
-    Y = np.transpose(Y)
-    grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-    initu, initv, initp = get_gauss_initial_data(X,Y,0.5,0.5)
-    plt.quiver(X,Y,initu[0],initv[0])
-    plt.show()
-
-
-    def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              wall_operator(sbp, state, 0, 'w') + \
-              outflow_operator(sbp, state, 0, 'e') + \
-              wall_operator(sbp, state, 0, 's') + \
-              wall_operator(sbp, state, 0, 'n')
-
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-
-def square_pressure_speed_outflow_everywhere(
-        N = 30,
-        num_timesteps = 10,
-        dt = 0.1):
-
-    (X,Y) = np.meshgrid(np.linspace(0,1,N), np.linspace(0,1,N))
-    X = np.transpose(X)
-    Y = np.transpose(Y)
-    grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-    initu, initv, initp = get_gauss_initial_data(X,Y,0.5,0.5)
-    plt.quiver(X,Y,initu[0],initv[0])
-    plt.show()
-
-
-    def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              outflow_operator(sbp, state, 0, 'w') + \
-              outflow_operator(sbp, state, 0, 'e') + \
-              outflow_operator(sbp, state, 0, 's') + \
-              outflow_operator(sbp, state, 0, 'n')
-
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-
-def circle_sector_pressure_speed_outflow_everywhere(
-        N = 30,
-        num_timesteps = 10,
-        dt = 0.1,
-        angle = 0.5*np.pi):
-
-    (X,Y) = get_circle_sector_grid(N, 0.0, angle, 0.2, 1.0)
-    grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-    initu, initv, initp = get_gauss_initial_data(X,Y,0.4,0.4)
-    plt.quiver(X,Y,initu[0],initv[0])
-    plt.show()
-
-
-    def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              outflow_operator(sbp, state, 0, 'w') + \
-              outflow_operator(sbp, state, 0, 'e') + \
-              outflow_operator(sbp, state, 0, 's') + \
-              outflow_operator(sbp, state, 0, 'n')
-
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-
-def square_cavity_flow(
-        N = 30,
-        num_timesteps = 10,
-        dt = 0.1):
-
-    (X,Y) = np.meshgrid(np.linspace(0,1,N), np.linspace(0,1,N))
-    X = np.transpose(X)
-    Y = np.transpose(Y)
-    grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-
-    initu, initv, initp = get_gauss_initial_data(X,Y,0.5,0.5)
-    plt.quiver(X,Y,initu[0],initv[0])
-    plt.show()
-
-
-    def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              wall_operator(sbp, state, 0, 'w') + \
-              wall_operator(sbp, state, 0, 'e') + \
-              wall_operator(sbp, state, 0, 's') + \
-              wall_operator(sbp, state, 0, 'n')
-
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-
-def circle_sector_cavity_flow(
-        N = 30,
-        num_timesteps = 10,
-        dt = 0.1,
-        angle = 0.5*np.pi):
-
-    (X,Y) = get_circle_sector_grid(N, 0.0, angle, 0.2, 1.0)
-    grid = MultiblockGrid([(X,Y)])
-    sbp = MultiblockSBP(grid, accuracy=2)
-
-    initu, initv, initp = get_gauss_initial_data(X,Y,0.4,0.4)
-    plt.quiver(X,Y,initu[0],initv[0])
-    plt.show()
-
-
-    def spatial_op(state):
-        S,J = euler_operator(sbp, state) + \
-              wall_operator(sbp, state, 0, 'w') + \
-              wall_operator(sbp, state, 0, 'e') + \
-              wall_operator(sbp, state, 0, 's') + \
-              wall_operator(sbp, state, 0, 'n')
-
-        return S, J
-
-
-    U,V,P = solve(grid, spatial_op, initu,
-                  initv, initp, dt, num_timesteps)
-
-    return grid,U,V,P,dt
-
-
-#SELECT ONE OF THE FUNCTIONS BELOW AND RUN SCRIPT
 #-----------------------------------
-#bump_const_inflow_pressure_outflow()
-#bump_const_inflow_pressure_speed_outflow()
-#bump_walls_and_pressure_speed_outflow()
-#square_walls_and_pressure_speed_outflow()
-#square_pressure_speed_outflow_everywhere()
-#circle_sector_pressure_speed_outflow_everywhere()
-#square_cavity_flow()
 #circle_sector_cavity_flow()
 
 if __name__ == '__main__':
-
-    grid,U,V,P,dt = bump_const_inflow_pressure_outflow(N = 30,num_timesteps = 50)
-    #grid,U,V,P,dt = circle_sector_pressure_speed_outflow_everywhere(num_timesteps=150)
-    animate_velocity(grid,U,V,dt)
-
-
+    N = 40
+    grid,U,V,W,P,dt = square_cavity_flow_polar_coordinates(N=N,dt= 1e-2,
+                                                           num_timesteps=200)

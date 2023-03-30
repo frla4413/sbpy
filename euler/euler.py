@@ -15,7 +15,7 @@ def op(state):
 defines a spatial operator with wall conditions, which returns the operator and
 its jacobian evaluated at the given state.
 
-The system can then be integrated using the bdf function, or the
+The system can then be integrated using the backward_euler function, or the
 sbp_in_time function.
 """
 
@@ -26,85 +26,28 @@ import numpy as np
 import scipy
 from scipy import sparse
 from tqdm import tqdm
-from sbpy import operators
-from sbpy.solve import solve_ivp, solve_steady_state, bdf1_step, bdf2_step, sbp_in_time_step_dg
-from sbpy.utils import export_to_tecplot
-import matplotlib.pyplot as plt
-from grid2d import flatten_multiblock_vector,allocate_gridfunction
 
-#def flatten_multiblock_vector(vec):
-#    return np.concatenate([ u.flatten() for u in vec])
+from sbpy import operators
+from sbpy.utils import export_to_tecplot
 
 
 def vec_to_tensor(grid, vec):
     shapes = grid.get_shapes()
-    component_length = np.sum([Nx*Ny for (Nx,Ny) in shapes])
-
-    vec = np.reshape(vec, (3,component_length))
+    component_length = np.prod([Nx*Ny for (Nx,Ny) in shapes])
+    vec = np.reshape(vec, (4,component_length))
 
     start = 0
     U = []
     V = []
+    W = []
     P = []
     for Nx,Ny in shapes:
         U.append(np.reshape(vec[0][start:(start+Nx*Ny)], (Nx,Ny)))
         V.append(np.reshape(vec[1][start:(start+Nx*Ny)], (Nx,Ny)))
-        P.append(np.reshape(vec[2][start:(start+Nx*Ny)], (Nx,Ny)))
-        start += Nx*Ny
+        W.append(np.reshape(vec[2][start:(start+Nx*Ny)], (Nx,Ny)))
+        P.append(np.reshape(vec[3][start:(start+Nx*Ny)], (Nx,Ny)))
 
-    return np.array([U, V, P])
-
-def get_jacobian_slice(block_idx, side, grid, is_flipped):
-    ''' Retrurns a slice-object. 
-        Used in interface_operator in pairs to access 
-        interface-parts of the jacobian.
-
-        Ex: jacobian[slice1,slice2] --> access the part of the Jacobian 
-                                        where interface2 affects interface1, 
-                                        which is in the rows of interface1
-                                        and columns of interface2.''' 
-
-    Nx,Ny      = grid.get_shapes()[block_idx]
-    N          = Nx*Ny
-    num_blocks = grid.num_blocks
-
-    if side == 'w':
-        start_ind   = block_idx*N
-        step        = 1
-        stop_ind    = start_ind + Ny
-
-    elif side == 'e':
-        start_ind   = (block_idx + 1)*N - Ny
-        step        = 1
-        stop_ind    = (block_idx + 1)*N
-
-    elif side == 's':
-        start_ind   = block_idx*N
-        step        = Ny
-        stop_ind    = (block_idx + 1)*N - Ny + 1
-
-    elif side == 'n':
-        start_ind   = block_idx*N + Ny-1
-        step        = Ny
-        stop_ind    = (block_idx + 1)*N
-
-    if is_flipped:
-        if side == 'w' or side == 's':
-            temp      = start_ind
-            start_ind = stop_ind-1
-            step      = -step
-            if temp == 0:
-                stop_ind = None
-            else:
-                stop_ind  = temp-1
-
-        if side == 'e' or side == 'n':
-            temp      = stop_ind
-            stop_ind  = start_ind-1
-            start_ind = temp-1
-            step      = -step
-
-    return slice(start_ind, stop_ind, step)
+    return np.array([U, V, W, P])
 
 def euler_operator(sbp, state):
     """ The Euler spatial operator.
@@ -117,664 +60,410 @@ def euler_operator(sbp, state):
         J - The Jacobian of S at the given state.
     """
 
-    u,v,p = vec_to_tensor(sbp.grid, state)
-    dudx = sbp.diffx(u)
-    dudy = sbp.diffy(u)
-    duudx = sbp.diffx(u*u)
-    dvdx = sbp.diffx(v)
-    dvdy = sbp.diffy(v)
-    dvvdy = sbp.diffy(v*v)
-    duvdx = sbp.diffx(u*v)
-    duvdy = sbp.diffy(u*v)
-    dpdx = sbp.diffx(p)
-    dpdy = sbp.diffy(p)
+    u,v,w,p = vec_to_tensor(sbp.grid, state)
 
-    l1 = 0.5*(u*dudx + v*dudy + duudx + duvdy) + dpdx
-    l2 = 0.5*(u*dvdx + v*dvdy + dvvdy + duvdx) + dpdy
-    l3 = dudx + dvdy
+    r = sbp.grid.get_X(0)
 
-    L = np.array([flatten_multiblock_vector(l1),
-                  flatten_multiblock_vector(l2),
-                  flatten_multiblock_vector(l3)]).flatten()
+    druudr = sbp.diffx(r*u*u)
+    dudr = sbp.diffx(u)
+    drpdr = sbp.diffx(r*p)
+    dpdr = sbp.diffx(p)
+    drwudz = sbp.diffy(r*w*u)
+    dudz = sbp.diffy(u)
 
-    Dx = scipy.sparse.block_diag([sbp.get_Dx(i) for i in range(len(u))], "csr")
-    Dy = scipy.sparse.block_diag([sbp.get_Dy(i) for i in range(len(u))], "csr")
+    drvudr = sbp.diffx(r*v*u)
+    dvdr = sbp.diffx(v)
+    drwvdz = sbp.diffy(r*w*v)
+    dvdz = sbp.diffy(v)
 
-    U  = sparse.diags(flatten_multiblock_vector(u))
-    V  = sparse.diags(flatten_multiblock_vector(v))
-    Ux = sparse.diags(flatten_multiblock_vector(dudx))
-    Uy = sparse.diags(flatten_multiblock_vector(dudy))
-    Vx = sparse.diags(flatten_multiblock_vector(dvdx))
-    Vy = sparse.diags(flatten_multiblock_vector(dvdy))
+    drwudr = sbp.diffx(r*w*u)
+    dwdr = sbp.diffx(w)
+    drwwdz = sbp.diffy(r*w*w)
+    dwdz = sbp.diffy(w)
+    drpdz = sbp.diffy(r*p)
+    dpdz = sbp.diffy(p)
 
-    dl1du = 0.5*(U@Dx + Ux + V@Dy + 2*Dx@U + Dy@V)
-    dl1dv = 0.5*(Uy + Dy@U)
-    dl1dp = Dx
-    dl2du = 0.5*(Vx + Dx@V)
-    dl2dv = 0.5*(U@Dx + V@Dy + Vy + Dx@U + 2*Dy@V)
-    dl2dp = Dy
-    dl3du = Dx
-    dl3dv = Dy
-    dl3dp = None
+    drudr = sbp.diffx(r*u)
+    drwdz = sbp.diffy(r*w)
 
-    J = sparse.bmat([[dl1du, dl1dv, dl1dp],
-                     [dl2du, dl2dv, dl2dp],
-                     [dl3du, dl3dv, dl3dp]])
+    l1 = 0.5*(druudr + r*u*dudr + drpdr + r*dpdr + drwudz + r*w*dudz - p) - v*v
+    l2 = 0.5*(drvudr + r*u*dvdr + drwvdz + r*w*dvdz) + u*v
+    l3 = 0.5*(drwudr + r*u*dwdr + drwwdz + r*w*dwdz + drpdz + r*dpdz)
+    l4 = 0.5*(drudr + r*dudr + drwdz + r*dwdz + u)
+
+    #return np.array([l1,l2,l3,l4]).flatten()
+    
+    #Jacobian
+    L = np.array([l1,l2,l3,l4]).flatten()
+    Dr = sbp.get_Dx(0)
+    Dz = sbp.get_Dy(0)
+    U = sparse.diags(u[0].flatten())
+    V = sparse.diags(v[0].flatten())
+    W = sparse.diags(w[0].flatten())
+    R = sparse.diags(r.flatten())
+    I = sparse.eye(len(r.flatten()))
+    Ur = sparse.diags(dudr.flatten())
+    Uz = sparse.diags(dudz.flatten())
+    Vr = sparse.diags(dvdr.flatten())
+    Vz = sparse.diags(dvdz.flatten())
+    Wr = sparse.diags(dwdr.flatten())
+    Wz = sparse.diags(dwdz.flatten())
+
+    dl1du = 0.5*(2*Dr@R@U + R@U@Dr + R@Ur + Dz@R@W + R@W@Dz)
+    dl1dv = -2*V
+    dl1dw = 0.5*(Dz@R@U + R@Uz)
+    dl1dp = 0.5*(Dr@R + R@Dr - I)
+
+    dl2du = 0.5*(Dr@R@V + R@Vr) + V
+    dl2dv = 0.5*(Dr@R@U + R@U@Dr + Dz@R@W + R@W@Dz) + U
+    dl2dw = 0.5*(Dz@R@V + R@Vz)
+    dl2dp = None
+
+    dl3du = 0.5*(Dr@R@W + R@Wr)
+    dl3dv = None
+    dl3dw = 0.5*(Dr@R@U + R@U@Dr + 2*Dz@R@W + R@W@Dz + R@Wz)
+    dl3dp = 0.5*(Dz@R + R@Dz)
+
+    dl4du = 0.5*(Dr@R + R@Dr + I)
+    dl4dv = None
+    dl4dw = 0.5*(Dz@R + R@Dz)
+    dl4dp = None
+
+    J = sparse.bmat([[dl1du, dl1dv, dl1dw, dl1dp],
+                     [dl2du, dl2dv, dl2dw, dl2dp],
+                     [dl3du, dl3dv, dl3dw, dl3dp],
+                     [dl4du, dl4dv, dl4dw, dl4dp]])
 
     J = sparse.csr_matrix(J)
 
     return np.array([L, J], dtype=object)
 
-def interface_operator(sbp, state, idx1, side1, idx2, side2, if_idx):
-    u,v,p = vec_to_tensor(sbp.grid, state)
-
-    bd_slice1   = sbp.grid.get_boundary_slice(idx1, side1)
-    u_bd1       = u[idx1][bd_slice1]
-    v_bd1       = v[idx1][bd_slice1]
-    p_bd1       = p[idx1][bd_slice1]
-    slice1      = get_jacobian_slice(idx1, side1, sbp.grid, False)
-
-    bd_slice2   = sbp.grid.get_boundary_slice(idx2, side2)
-    u_bd2       = u[idx2][bd_slice2]
-    v_bd2       = v[idx2][bd_slice2]
-    p_bd2       = p[idx2][bd_slice2]
-
-    s1          = allocate_gridfunction(sbp.grid)
-    s2          = allocate_gridfunction(sbp.grid)
-    s3          = allocate_gridfunction(sbp.grid)
-    slice2      = get_jacobian_slice(idx2, side2, sbp.grid, False)
-
-    ## idx1
-    pinv        = sbp.get_pinv(idx1, side1)
-    bd_quad     = sbp.get_boundary_quadrature(idx1, side1)
-    lift        = -pinv*bd_quad
-
-    u_bar = 0.5*(u_bd1 + u_bd2)
-    v_bar = 0.5*(v_bd1 + v_bd2)
-    u_jump = u_bd1 - u_bd2
-    v_jump = v_bd1 - v_bd2
-    p_jump = p_bd1 - p_bd2
-
-    uL = 0.75*u_bar + u_jump/8
-    s1[idx1][bd_slice1] = lift*(uL*u_jump + p_jump/2)
-    s2[idx1][bd_slice1] = lift*(0.5*u_bar*v_jump + v_bar*u_jump/4 +
-                                u_jump*v_jump/8)
-    s3[idx1][bd_slice1] = lift*u_jump/2
-
-    duLdu1 = 0.75*0.5 + 1/8
-    duLdu2 = 0.75*0.5 - 1/8
-    du_jumpdu1 = 1
-    du_jumpdu2 = -1
-
-    ds1du1                  = allocate_gridfunction(sbp.grid)
-    ds1du1[idx1][bd_slice1] = lift*(duLdu1*u_jump + uL*du_jumpdu1)
-    ds1du2                  = lift*(duLdu2*u_jump + uL*du_jumpdu2)
-    ds1du                   = sparse.diags(flatten_multiblock_vector(ds1du1), format='csr')
-    ds1du[slice1,slice2]    = np.diag(ds1du2)
-
-    ds1dv1                  = allocate_gridfunction(sbp.grid)
-    ds1dv                   = sparse.diags(flatten_multiblock_vector(ds1dv1), format='csr')
-
-    ds1dp1                  = allocate_gridfunction(sbp.grid)
-    ds1dp1[idx1][bd_slice1] = 0.5*lift
-    ds1dp2                  = -0.5*lift
-    ds1dp                   = sparse.diags(flatten_multiblock_vector(ds1dp1),format='csr')
-    ds1dp[slice1,slice2]    = np.diag(ds1dp2)
-
-    ds2du1                  = allocate_gridfunction(sbp.grid)
-    ds2du1[idx1][bd_slice1] = lift*(v_bar/4 + v_jump*(1/4 + 1/8))
-    ds2du2                  = lift*(-v_bar/4 + v_jump*(1/4-1/8))
-    ds2du                   = sparse.diags(flatten_multiblock_vector(ds2du1),format='csr')
-    ds2du[slice1,slice2]    = np.diag(ds2du2)
-
-    ds2dv1                  = allocate_gridfunction(sbp.grid)
-    ds2dv1[idx1][bd_slice1] = lift*(u_jump/8 + (u_bar/2 + u_jump/8))
-    ds2dv2                  = lift*(u_jump/8 - (u_bar/2 + u_jump/8))
-    ds2dv                   = sparse.diags(flatten_multiblock_vector(ds2dv1),format='csr')
-    ds2dv[slice1,slice2]    = np.diag(ds2dv2)
-
-    ds2dp1                  = allocate_gridfunction(sbp.grid)
-    ds2dp                   = sparse.diags(flatten_multiblock_vector(ds2dp1),format='csr')
-
-    ds3du1                  = allocate_gridfunction(sbp.grid)
-    ds3du1[idx1][bd_slice1] = lift/2
-    ds3du2                  = -lift/2
-    ds3du                   = sparse.diags(flatten_multiblock_vector(ds3du1),format='csr')
-    ds3du[slice1,slice2]    = np.diag(ds3du2)
-
-    ds3dv1                  = allocate_gridfunction(sbp.grid)
-    ds3dv                   = sparse.diags(flatten_multiblock_vector(ds3dv1),format='csr')
-
-    ds3dp = None
-
-    ############# idx2 - coupling ####################
-    pinv        = sbp.get_pinv(idx2, side2)
-    bd_quad     = sbp.get_boundary_quadrature(idx2, side2)
-    lift        = -pinv*bd_quad
-
-    uR = (0.75*u_bar - u_jump/8)
-
-    s1[idx2][bd_slice2] += lift*(uR*u_jump + p_jump/2)
-    s2[idx2][bd_slice2] += lift*(0.5*u_bar*v_jump +
-                                 v_bar*u_jump/4 -
-                                 u_jump*v_jump/8)
-    s3[idx2][bd_slice2] += lift*u_jump/2
-
-    duRdu1 = 0.75*0.5 - 1/8
-    duRdu2 = 0.75*0.5 + 1/8
-
-    S = np.array([flatten_multiblock_vector(s1),
-                  flatten_multiblock_vector(s2),
-                  flatten_multiblock_vector(s3)]).flatten()
-
-    ds1du2                  = allocate_gridfunction(sbp.grid)
-    ds1du2[idx2][bd_slice2] = lift*(duRdu2*u_jump + uR*du_jumpdu2)
-    ds1du1                  = lift*(duRdu1*u_jump + uR*du_jumpdu1)
-
-    ds1du                  += sparse.diags(flatten_multiblock_vector(ds1du2))
-    ds1du[slice2,slice1]   += sparse.diags(ds1du1)
-
-    ds1dp2                  = allocate_gridfunction(sbp.grid)
-    ds1dp2[idx2][bd_slice2] = -0.5*lift
-    ds1dp1                  = 0.5*lift
-    ds1dp                  += sparse.diags(flatten_multiblock_vector(ds1dp2))
-    ds1dp[slice2,slice1]   += sparse.diags(ds1dp1)
-
-    ds2du2                  = allocate_gridfunction(sbp.grid)
-    ds2du2[idx2][bd_slice2] = lift*(v_jump/4 - v_bar/4 + v_jump/8)
-    ds2du1                  = lift*(v_jump/4 + v_bar/4 - v_jump/8)
-    ds2du                  += sparse.diags(flatten_multiblock_vector(ds2du2))
-
-    ds2du[slice2,slice1]   += sparse.diags(ds2du1)
-    ds2dv2                  = allocate_gridfunction(sbp.grid)
-    ds2dv2[idx2][bd_slice2] = lift*(-0.5*u_bar + u_jump/8+u_jump/8)
-    ds2dv1                  = lift*(0.5*u_bar + u_jump/8 - u_jump/8)
-    ds2dv                   += sparse.diags(flatten_multiblock_vector(ds2dv2))
-    ds2dv[slice2,slice1]    += sparse.diags(ds2dv1)
-
-    ds3du2                  = allocate_gridfunction(sbp.grid)
-    ds3du2[idx2][bd_slice2] = -lift/2
-    ds3du1                  = lift/2
-    ds3du                  += sparse.diags(flatten_multiblock_vector(ds3du2))
-    ds3du[slice2,slice1]   += sparse.diags(ds3du1)
-
-    J = sparse.bmat([[ds1du, ds1dv, ds1dp],
-                     [ds2du, ds2dv, ds2dp],
-                     [ds3du, ds3dv, ds3dp]])
-
-    return np.array([S,J], dtype=object)
-
 
 def wall_operator(sbp, state, block_idx, side):
-
-    u,v,p    = vec_to_tensor(sbp.grid, state)
+    u,v,w,_ = vec_to_tensor(sbp.grid, state)
     bd_slice = sbp.grid.get_boundary_slice(block_idx, side)
-    normals  = sbp.get_normals(block_idx, side)
-    nx       = normals[:,0]
-    ny       = normals[:,1]
-    u_bd     = u[block_idx][bd_slice]
-    v_bd     = v[block_idx][bd_slice]
-    wn       = u_bd*nx + v_bd*ny
-    pinv     = sbp.get_pinv(block_idx, side)
-    bd_quad  = sbp.get_boundary_quadrature(block_idx, side)
-    lift     = pinv*bd_quad
+    u_bd = u[block_idx][bd_slice]
+    v_bd = v[block_idx][bd_slice]
+    w_bd = w[block_idx][bd_slice]
+    n = sbp.get_normals(block_idx,side)
+    nx = n[:,0]
+    un   = nx*u_bd
+    pinv = sbp.get_pinv(block_idx, side)
+    bd_quad = sbp.get_boundary_quadrature(block_idx, side)
+    lift = pinv*bd_quad
 
+    r_bd = sbp.grid.get_X(block_idx)[bd_slice]
+
+    Nx,Ny = sbp.grid.get_shapes()[0]
     num_blocks = sbp.grid.num_blocks
-    s1         = allocate_gridfunction(sbp.grid)
-    s2         = allocate_gridfunction(sbp.grid)
-    s3         = allocate_gridfunction(sbp.grid)
+    s1 = np.zeros((num_blocks,Nx,Ny))
+    s2 = np.zeros((num_blocks,Nx,Ny))
+    s3 = np.zeros((num_blocks,Nx,Ny))
+    s4 = np.zeros((num_blocks,Nx,Ny))
 
-    s1[block_idx][bd_slice] = -0.5*lift*u_bd*wn
-    s2[block_idx][bd_slice] = -0.5*lift*v_bd*wn
-    s3[block_idx][bd_slice] = -lift*wn
+    s1[block_idx][bd_slice] = -0.5*lift*r_bd*u_bd*un
+    s2[block_idx][bd_slice] = -0.5*lift*r_bd*v_bd*un
+    s3[block_idx][bd_slice] = -0.5*lift*r_bd*w_bd*un
+    s4[block_idx][bd_slice] = -lift*r_bd*un
 
-    S = np.array([flatten_multiblock_vector(s1),
-                  flatten_multiblock_vector(s2),
-                  flatten_multiblock_vector(s3)]).flatten()
+    #return np.array([s1, s2, s3, s4]).flatten() 
+
+    S = np.array([s1, s2, s3, s4]).flatten()
 
     #Jacobian
-    ds1du                      = allocate_gridfunction(sbp.grid)
-    ds1du[block_idx][bd_slice] = 0.5*lift*(u_bd*nx + wn)
+    ds1du = np.zeros((Nx,Ny))
+    ds1du[bd_slice] = -0.5*lift*r_bd*(u_bd*nx + un)
+    ds1du = sparse.diags(ds1du.flatten())
+    ds1dv = np.zeros((Nx,Ny))
+    ds1dv = sparse.diags(ds1dv.flatten())
+    ds1dw = np.zeros((Nx,Ny))
+    ds1dw = sparse.diags(ds1dw.flatten())
+    ds1dp = np.zeros((Nx,Ny))
+    ds1dp = sparse.diags(ds1dp.flatten())
 
-    ds1du                       = sparse.diags(flatten_multiblock_vector(ds1du))
-    ds1dv                       = allocate_gridfunction(sbp.grid)
-    ds1dv[block_idx][bd_slice]  = 0.5*lift*u_bd*ny
-    ds1dv                       = sparse.diags(flatten_multiblock_vector(ds1dv))
-    ds1dp                       = allocate_gridfunction(sbp.grid)
-    ds1dp                       = sparse.diags(flatten_multiblock_vector(ds1dp))
+    ds2du = np.zeros((Nx,Ny))
+    ds2du[bd_slice] = -0.5*lift*r_bd*v_bd*nx
+    ds2du = sparse.diags(ds2du.flatten())
+    ds2dv = np.zeros((Nx,Ny))
+    ds2dv[bd_slice] = -0.5*lift*r_bd*un
+    ds2dv = sparse.diags(ds2dv.flatten())
+    ds2dw = np.zeros((Nx,Ny))
+    ds2dw = sparse.diags(ds2dw.flatten())
+    ds2dp = np.zeros((Nx,Ny))
+    ds2dp = sparse.diags(ds2dp.flatten())
 
-    ds2du                       = allocate_gridfunction(sbp.grid)
-    ds2du[block_idx][bd_slice]  = 0.5*lift*v_bd*nx
-    ds2du                       = sparse.diags(flatten_multiblock_vector(ds2du))
-    ds2dv                       = allocate_gridfunction(sbp.grid)
-    ds2dv[block_idx][bd_slice]  = 0.5*lift*(v_bd*ny + wn) 
-    ds2dv                       = sparse.diags(flatten_multiblock_vector(ds2dv))
-    ds2dp                       = allocate_gridfunction(sbp.grid)
-    ds2dp                       = sparse.diags(flatten_multiblock_vector(ds2dp))
+    ds3du = np.zeros((Nx,Ny))
+    ds3du[bd_slice] = -0.5*lift*r_bd*w_bd*nx
+    ds3du = sparse.diags(ds3du.flatten())
+    ds3dv = np.zeros((Nx,Ny))
+    ds3dv = sparse.diags(ds3dv.flatten())
+    ds3dw = np.zeros((Nx,Ny))
+    ds3dw[bd_slice] = -0.5*lift*r_bd*un
+    ds3dw = sparse.diags(ds3dw.flatten())
+    ds3dp = np.zeros((Nx,Ny))
+    ds3dp = sparse.diags(ds3dp.flatten())
 
-    ds3du                       = allocate_gridfunction(sbp.grid)
-    ds3du[block_idx][bd_slice]  = lift*nx
-    ds3du                       = sparse.diags(flatten_multiblock_vector(ds3du))
-    ds3dv                       = allocate_gridfunction(sbp.grid)
-    ds3dv[block_idx][bd_slice]  = lift*ny
-    ds3dv                       = sparse.diags(flatten_multiblock_vector(ds3dv))
-    ds3dp                       = allocate_gridfunction(sbp.grid)
-    ds3dp                       = sparse.diags(flatten_multiblock_vector(ds3dp))
-    
-    J = -sparse.bmat([[ds1du, ds1dv, ds1dp],
-                      [ds2du, ds2dv, ds2dp],
-                      [ds3du, ds3dv, ds3dp]])
+    ds4du = np.zeros((Nx,Ny))
+    ds4du[bd_slice] = -lift*r_bd*nx
+    ds4du = sparse.diags(ds4du.flatten())
+    ds4dv = np.zeros((Nx,Ny))
+    ds4dv = sparse.diags(ds4dv.flatten())
+    ds4dw = np.zeros((Nx,Ny))
+    ds4dw = sparse.diags(ds4dw.flatten())
+    ds4dp = np.zeros((Nx,Ny))
+    ds4dp = sparse.diags(ds4dp.flatten())
+
+    J = sparse.bmat([[ds1du, ds1dv, ds1dw, ds1dp,],
+                     [ds2du, ds2dv, ds2dw, ds2dp],
+                     [ds3du, ds3dv, ds3dw, ds3dp],
+                     [ds4du, ds4dv, ds4dw, ds4dp]])
 
     return np.array([S,J], dtype=object)
 
-def jans_inflow_operator(sbp, state, block_idx, side, data):
+def interior_penalty_operator_w(sbp, state, block_idx):
+    "Penalty w = 0 at r = 0. Use only at west side."
 
-    u,v,p    = vec_to_tensor(sbp.grid, state)
+    side = 'w'
+    u,v,w,_ = vec_to_tensor(sbp.grid, state)
     bd_slice = sbp.grid.get_boundary_slice(block_idx, side)
-    normals  = sbp.get_normals(block_idx, side)
-    nx       = normals[:,0]
-    ny       = normals[:,1]
-    u_bd     = u[block_idx][bd_slice]
-    v_bd     = v[block_idx][bd_slice]
-    wn       = u_bd*nx + v_bd*ny
-    pinv     = sbp.get_pinv(block_idx, side)
-    bd_quad  = sbp.get_boundary_quadrature(block_idx, side)
-    lift     = pinv*bd_quad
+    u_bd = u[block_idx][bd_slice]
+    v_bd = v[block_idx][bd_slice]
+    w_bd = w[block_idx][bd_slice]
+    pinv = sbp.get_pinv(block_idx, side)
 
+    Nx,Ny = sbp.grid.get_shapes()[0]
     num_blocks = sbp.grid.num_blocks
-    s1         = allocate_gridfunction(sbp.grid)#allocate_gridfunction(sbp.grid)
-    s2         = allocate_gridfunction(sbp.grid)#allocate_gridfunction(sbp.grid)
-    s3         = allocate_gridfunction(sbp.grid)#allocate_gridfunction(sbp.grid)
+    s1 = np.zeros((num_blocks,Nx,Ny))
+    s2 = np.zeros((num_blocks,Nx,Ny))
+    s3 = np.zeros((num_blocks,Nx,Ny))
+    s4 = np.zeros((num_blocks,Nx,Ny))
 
-    s1[block_idx][bd_slice] = -0.5*lift*u_bd*(wn - data)
-    s2[block_idx][bd_slice] = -0.5*lift*v_bd*(wn - data)
-    s3[block_idx][bd_slice] = -lift*(wn - data)
+    s1[block_idx][bd_slice] = pinv*u_bd
+    s2[block_idx][bd_slice] = pinv*v_bd
 
-    S = np.array([flatten_multiblock_vector(s1),
-                  flatten_multiblock_vector(s2), 
-                  flatten_multiblock_vector(s3)]).flatten()
+    #return np.array([s1, s2, s3, s4]).flatten() 
 
-    #Jacobian
-    ds1du                      = allocate_gridfunction(sbp.grid)
-    ds1du[block_idx][bd_slice] = 0.5*lift*(u_bd*nx + (wn - data))
-
-    ds1du                       = sparse.diags(flatten_multiblock_vector(ds1du))
-    ds1dv                       = allocate_gridfunction(sbp.grid)
-    ds1dv[block_idx][bd_slice]  = 0.5*lift*u_bd*ny
-    ds1dv                       = sparse.diags(flatten_multiblock_vector(ds1dv))
-    ds1dp                       = allocate_gridfunction(sbp.grid)
-    ds1dp                       = sparse.diags(flatten_multiblock_vector(ds1dp))
-
-    ds2du                       = allocate_gridfunction(sbp.grid)
-    ds2du[block_idx][bd_slice]  = 0.5*lift*v_bd*nx
-    ds2du                       = sparse.diags(flatten_multiblock_vector(ds2du))
-    ds2dv                       = allocate_gridfunction(sbp.grid)
-    ds2dv[block_idx][bd_slice]  = 0.5*lift*(v_bd*ny + (wn - data))
-    ds2dv                       = sparse.diags(flatten_multiblock_vector(ds2dv))
-    ds2dp                       = allocate_gridfunction(sbp.grid)
-    ds2dp                       = sparse.diags(flatten_multiblock_vector(ds2dp))
-
-    ds3du                       = allocate_gridfunction(sbp.grid)
-    ds3du[block_idx][bd_slice]  = lift*nx
-    ds3du                       = sparse.diags(flatten_multiblock_vector(ds3du))
-    ds3dv                       = allocate_gridfunction(sbp.grid)
-    ds3dv[block_idx][bd_slice]  = lift*ny
-    ds3dv                       = sparse.diags(flatten_multiblock_vector(ds3dv))
-    ds3dp                       = allocate_gridfunction(sbp.grid)
-    ds3dp                       = sparse.diags(flatten_multiblock_vector(ds3dp))
-    
-    J = -sparse.bmat([[ds1du, ds1dv, ds1dp],
-                      [ds2du, ds2dv, ds2dp],
-                      [ds3du, ds3dv, ds3dp]])
-
-    return np.array([S,J], dtype=object)
-
-
-
-def inflow_operator(sbp, state, block_idx, side, wn_data_func, wt_data_func, t = 0):
-    u,v,p       = vec_to_tensor(sbp.grid, state)
-    bd_slice    = sbp.grid.get_boundary_slice(block_idx, side)
-    normals     = sbp.get_normals(block_idx, side)
-    nx          = normals[:,0]
-    ny          = normals[:,1]
-    u_bd        = u[block_idx][bd_slice]
-    v_bd        = v[block_idx][bd_slice]
-    wn          = u_bd*nx + v_bd*ny
-    wt          = -u_bd*ny + v_bd*nx
-    pinv        = sbp.get_pinv(block_idx, side)
-    bd_quad     = sbp.get_boundary_quadrature(block_idx, side)
-    lift        = pinv*bd_quad
-
-    num_blocks  = sbp.grid.num_blocks
-
-    wn_data     = wn_data_func(sbp,block_idx,side,t)
-    wt_data     = wt_data_func(sbp,block_idx,side,t)
-    s1         = allocate_gridfunction(sbp.grid)
-    s2         = allocate_gridfunction(sbp.grid)
-    s3         = allocate_gridfunction(sbp.grid)
-
-    s1[block_idx][bd_slice] = -lift*nx*wn*(wn-wn_data) \
-                              +lift*ny*wn*(wt-wt_data)
-    s2[block_idx][bd_slice] = -lift*ny*wn*(wn-wn_data) \
-                              -lift*nx*wn*(wt-wt_data)
-    s3[block_idx][bd_slice] = -lift*(wn-wn_data)
-
-    S = np.array([flatten_multiblock_vector(s1),
-                  flatten_multiblock_vector(s2),
-                  flatten_multiblock_vector(s3)]).flatten()
-    #Jacobian
-    ds1du                       = allocate_gridfunction(sbp.grid)
-    ds1du[block_idx][bd_slice]  = -lift*(nx*nx*(2*wn-wn_data) + \
-                                        ny*ny*wn - nx*ny*(wt-wt_data))
-    ds1du                       = sparse.diags(flatten_multiblock_vector(ds1du))
-
-    ds1dv                       = allocate_gridfunction(sbp.grid)
-    ds1dv[block_idx][bd_slice]  = -lift*(nx*ny*(2*wn-wn_data) - \
-                                    ny*nx*wn - ny*ny*(wt-wt_data))
-    ds1dv                       = sparse.diags(flatten_multiblock_vector(ds1dv))
-    ds1dp                       = allocate_gridfunction(sbp.grid)
-    ds1dp                       = sparse.diags(flatten_multiblock_vector(ds1dp))
-
-    ds2du                       = allocate_gridfunction(sbp.grid)
-    ds2du[block_idx][bd_slice]  = -lift*(nx*ny*(2*wn-wn_data) - \
-                                    nx*ny*wn + nx*nx*(wt-wt_data))
-    ds2du                       = sparse.diags(flatten_multiblock_vector(ds2du))
-    ds2dv                       = allocate_gridfunction(sbp.grid)
-    ds2dv[block_idx][bd_slice]  = -lift*(ny*ny*(2*wn-wn_data) + \
-                                    nx*nx*wn + nx*ny*(wt-wt_data))
-    ds2dv                       = sparse.diags(flatten_multiblock_vector(ds2dv))
-    ds2dp                       = allocate_gridfunction(sbp.grid)
-    ds2dp                       = sparse.diags(flatten_multiblock_vector(ds2dp))
-
-    ds3du                       = allocate_gridfunction(sbp.grid)
-    ds3du[block_idx][bd_slice]  = -lift*nx
-    ds3du                       = sparse.diags(flatten_multiblock_vector(ds3du))
-    ds3dv                       = allocate_gridfunction(sbp.grid)
-    ds3dv[block_idx][bd_slice]  = -lift*ny
-    ds3dv                       = sparse.diags(flatten_multiblock_vector(ds3dv))
-    ds3dp                       = allocate_gridfunction(sbp.grid)
-    ds3dp                       = sparse.diags(flatten_multiblock_vector(ds3dp))
-
-    J = sparse.bmat([[ds1du, ds1dv, ds1dp],
-                     [ds2du, ds2dv, ds2dp],
-                     [ds3du, ds3dv, ds3dp]])
-
-    return np.array([S,J], dtype=object)
-
-def pressure_operator(sbp, state, block_idx, side, p_data_func = 0, t = 0):
-    u,v,p       = vec_to_tensor(sbp.grid, state)
-    bd_slice    = sbp.grid.get_boundary_slice(block_idx, side)
-    normals     = sbp.get_normals(block_idx, side)
-    nx          = normals[:,0]
-    ny          = normals[:,1]
-    p_bd        = p[block_idx][bd_slice]
-    u_bd        = u[block_idx][bd_slice]
-    pinv        = sbp.get_pinv(block_idx, side)
-    bd_quad     = sbp.get_boundary_quadrature(block_idx, side)
-    lift        = pinv*bd_quad
-
-    if p_data_func != 0:
-        p_data      = p_data_func(sbp, block_idx, side, t)
-    else: 
-        p_data = 0
-
-
-    num_blocks  = sbp.grid.num_blocks
-    s1                      = allocate_gridfunction(sbp.grid)
-    s1[block_idx][bd_slice] = -lift*(nx*p_bd -  nx*p_data)
-    s2                      = allocate_gridfunction(sbp.grid)
-    s2[block_idx][bd_slice] = -lift*(ny*p_bd - ny*p_data)
-    s3                      = allocate_gridfunction(sbp.grid)
-
-    S = np.array([flatten_multiblock_vector(s1),
-                  flatten_multiblock_vector(s2),
-                  flatten_multiblock_vector(s3)]).flatten()
+    S = np.array([s1, s2, s3, s4]).flatten()
 
     #Jacobian
-    n_o_p                       = np.sum([Nx*Ny for (Nx,Ny) in sbp.grid.get_shapes()])
-    ds1du                       = sparse.csr_matrix((n_o_p,n_o_p))
-    ds1dv                       = None
-    ds1dp                       = allocate_gridfunction(sbp.grid)
-    ds1dp[block_idx][bd_slice]  = lift*nx
-    ds1dp                       = sparse.diags(flatten_multiblock_vector(ds1dp))
+    ds1du = np.zeros((Nx,Ny))
+    ds1du[bd_slice] = pinv 
+    ds1du = sparse.diags(ds1du.flatten())
+    ds1dv = np.zeros((Nx,Ny))
+    ds1dv = sparse.diags(ds1dv.flatten())
+    ds1dw = np.zeros((Nx,Ny))
+    ds1dw = sparse.diags(ds1dw.flatten())
+    ds1dp = np.zeros((Nx,Ny))
+    ds1dp = sparse.diags(ds1dp.flatten())
 
-    ds2du                       = None
+    ds2du = np.zeros((Nx,Ny))
+    ds2du = sparse.diags(ds2du.flatten())
+    ds2dv = np.zeros((Nx,Ny))
+    ds2dv[bd_slice] = pinv 
+    ds2dv = sparse.diags(ds2dv.flatten())
+    ds2dw = np.zeros((Nx,Ny))
+    ds2dw = sparse.diags(ds2dw.flatten())
+    ds2dp = np.zeros((Nx,Ny))
+    ds2dp = sparse.diags(ds2dp.flatten())
 
-    ds2dv                       = sparse.csr_matrix((n_o_p,n_o_p))
-    ds2dp                       = allocate_gridfunction(sbp.grid)
-    ds2dp[block_idx][bd_slice]  = lift*ny
-    ds2dp                       = sparse.diags(flatten_multiblock_vector(ds2dp))
+    ds3du = np.zeros((Nx,Ny))
+    ds3du = sparse.diags(ds3du.flatten())
+    ds3dv = np.zeros((Nx,Ny))
+    ds3dv = sparse.diags(ds3dv.flatten())
+    ds3dw = np.zeros((Nx,Ny))
+    ds3dw = sparse.diags(ds3dw.flatten())
+    ds3dp = np.zeros((Nx,Ny))
+    ds3dp = sparse.diags(ds3dp.flatten())
 
-    ds3du = sparse.csr_matrix((n_o_p, n_o_p))
-    ds3dv = None
-    ds3dp = None
+    ds4du = np.zeros((Nx,Ny))
+    ds4du = sparse.diags(ds4du.flatten())
+    ds4dv = np.zeros((Nx,Ny))
+    ds4dv = sparse.diags(ds4dv.flatten())
+    ds4dw = np.zeros((Nx,Ny))
+    ds4dw = sparse.diags(ds4dw.flatten())
+    ds4dp = np.zeros((Nx,Ny))
+    ds4dp = sparse.diags(ds4dp.flatten())
 
-    J = -sparse.bmat([[ds1du, ds1dv, ds1dp],
-                      [ds2du, ds2dv, ds2dp],
-                      [ds3du, ds3dv, ds3dp]])
+    J = sparse.bmat([[ds1du, ds1dv, ds1dw, ds1dp,],
+                     [ds2du, ds2dv, ds2dw, ds2dp],
+                     [ds3du, ds3dv, ds3dw, ds3dp],
+                     [ds4du, ds4dv, ds4dw, ds4dp]])
 
     return np.array([S,J], dtype=object)
 
 
 def outflow_operator(sbp, state, block_idx, side):
-    ## for outflow boundaries that might switch to inflow boundaries
 
-    u,v,p       = vec_to_tensor(sbp.grid, state)
-    bd_slice    = sbp.grid.get_boundary_slice(block_idx, side)
-    normals     = sbp.get_normals(block_idx, side)
-    nx          = normals[:,0]
-    ny          = normals[:,1]
-    u_bd        = u[block_idx][bd_slice]
-    v_bd        = v[block_idx][bd_slice]
-    p_bd        = p[block_idx][bd_slice]
-    wn          = u_bd*nx + v_bd*ny
-    wt          = -u_bd*ny + v_bd*nx
-    pinv        = sbp.get_pinv(block_idx, side)
-    bd_quad     = sbp.get_boundary_quadrature(block_idx, side)
-    lift        = pinv*bd_quad
+    ## for outflow boundary that might switch to inflow 
 
-    Nx,Ny       = sbp.grid.get_shapes()[0]
-    num_blocks  = sbp.grid.num_blocks
-    s1          = allocate_gridfunction(sbp.grid)
-    s2          = allocate_gridfunction(sbp.grid)
-    s3          = allocate_gridfunction(sbp.grid)
+    u,v,w,p    = vec_to_tensor(sbp.grid, state)
+    bd_slice = sbp.grid.get_boundary_slice(block_idx, side)
+    normals = sbp.get_normals(block_idx, side)
+    nx      = normals[:,0]
+    ny      = normals[:,1]
+    u_bd    = u[block_idx][bd_slice]
+    v_bd    = v[block_idx][bd_slice]
+    w_bd    = w[block_idx][bd_slice]
+    p_bd    = p[block_idx][bd_slice]
+    pinv    = sbp.get_pinv(block_idx, side)
+    bd_quad = sbp.get_boundary_quadrature(block_idx, side)
+    lift    = pinv*bd_quad
+
+    r_bd = sbp.grid.get_X(block_idx)[bd_slice]
+
+    Nx,Ny      = sbp.grid.get_shapes()[0]
+    num_blocks = sbp.grid.num_blocks
+    s1 = np.zeros((num_blocks,Nx,Ny))
+    s2 = np.zeros((num_blocks,Nx,Ny))
+    s3 = np.zeros((num_blocks,Nx,Ny))
+    s4 = np.zeros((num_blocks,Nx,Ny))
 
     #parameters for sigmoid function, large a --> more steep curve, c --> shift sideways
-    a = 50
-    c = 0
-    mag = 2
-    h = mag*np.exp(c)/(np.exp(a*wn) + np.exp(c))
+    a = 15
+    c = 0.2
+    h = np.exp(c)/(np.exp(a*w_bd) + np.exp(c))
 
-    w2 = wn*wn+wt*wt
-    s1[block_idx][bd_slice] = -lift*nx*(h*w2+p_bd)
-    s2[block_idx][bd_slice] = -lift*ny*(h*w2+p_bd)
+    u2 = u_bd**2 + v_bd**2 + w_bd**2
+    s3[block_idx][bd_slice] = -lift*ny*r_bd*(h*u2+p_bd)
 
-    S = np.array([flatten_multiblock_vector(s1),
-                  flatten_multiblock_vector(s2),
-                  flatten_multiblock_vector(s3)]).flatten()
+    #return np.array([s1, s2, s3, s4]).flatten()
 
+    S = np.array([s1, s2, s3, s4]).flatten()
 
     #Jacobian
-    dhdwn = -mag*a*np.exp(a*wn+c)/((np.exp(a*wn) + np.exp(c))**2)
-    dhdu  = dhdwn*nx
-    dhdv  = dhdwn*ny
+    dhdw = -a*np.exp(a*w_bd+c)/((np.exp(a*w_bd) + np.exp(c))**2)
 
-    dw2du = 2*(wn*nx-wt*ny) # derivative of wn^2+wt^2 w.r.t. u
-    dw2dv = 2*(wn*ny+wt*nx) # derivative of wn^2+wt^2 w.r.t. v
+    du2du = 2*u_bd # derivative of u2 w.r.t. u
+    du2dv = 2*v_bd # derivative of u2 w.r.t. v
+    du2dw = 2*w_bd # derivative of u2 w.r.t. w
 
-    ds1du                       = allocate_gridfunction(sbp.grid)
-    ds1du[block_idx][bd_slice]  = -lift*nx*(dhdu*w2+h*dw2du)
-    ds1du                       = sparse.diags(flatten_multiblock_vector(ds1du))
+    ds1du           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
+    ds1dv           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
+    ds1dw           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
+    ds1dp           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
 
-    ds1dv                       = allocate_gridfunction(sbp.grid)
-    ds1dv[block_idx][bd_slice]  = -lift*nx*(dhdv*w2+h*dw2dv)
-    ds1dv                       = sparse.diags(flatten_multiblock_vector(ds1dv))
+    ds2du           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
+    ds2dv           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
+    ds2dw           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
+    ds2dp           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
 
-    ds1dp                       = allocate_gridfunction(sbp.grid)
-    ds1dp[block_idx][bd_slice]  = -lift*nx
-    ds1dp                       = sparse.diags(flatten_multiblock_vector(ds1dp))
+    ds3du           = np.zeros((Nx,Ny))
+    ds3du[bd_slice] = -lift*ny*r_bd*h*du2du
+    ds3du           = sparse.diags(ds3du.flatten())
 
-    ds2du                       = allocate_gridfunction(sbp.grid)
-    ds2du[block_idx][bd_slice]  = -lift*ny*(dhdu*w2+h*dw2du)
-    ds2du                       = sparse.diags(flatten_multiblock_vector(ds2du))
+    ds3dv           = np.zeros((Nx,Ny))
+    ds3dv[bd_slice] = -lift*ny*r_bd*h*du2dv
+    ds3dv           = sparse.diags(ds3dv.flatten())
 
-    ds2dv                       = allocate_gridfunction(sbp.grid)
-    ds2dv[block_idx][bd_slice]  = -lift*ny*(dhdv*w2+h*dw2dv)
-    ds2dv                       = sparse.diags(flatten_multiblock_vector(ds2dv))
+    ds3dw           = np.zeros((Nx,Ny))
+    ds3dw[bd_slice] = -lift*ny*r_bd*(dhdw*u2+h*du2dw)
+    ds3dw           = sparse.diags(ds3dw.flatten())
+    ds3dv           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
 
-    ds2dp                       = allocate_gridfunction(sbp.grid)
-    ds2dp[block_idx][bd_slice]  = -lift*ny
-    ds2dp                       = sparse.diags(flatten_multiblock_vector(ds2dp))
+    ds3dp           = np.zeros((Nx,Ny))
+    ds3dp[bd_slice] = -lift*ny*r_bd
+    ds3dp           = sparse.diags(ds3dp.flatten())
 
-    n_o_p                       = np.sum([Nx*Ny for (Nx,Ny) in sbp.grid.get_shapes()])
-    ds3du                       = sparse.csr_matrix((n_o_p, n_o_p))
-    ds3dv                       = sparse.csr_matrix((n_o_p, n_o_p))
-    ds3dp                       = sparse.csr_matrix((n_o_p, n_o_p))
+    ds4du           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
+    ds4dv           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
+    ds4dw           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
+    ds4dp           = sparse.csr_matrix((Nx*Ny, Nx*Ny))
 
-    J = sparse.bmat([[ds1du, ds1dv, ds1dp],
-                     [ds2du, ds2dv, ds2dp],
-                     [ds3du, ds3dv, ds3dp]])
+    J = sparse.bmat([[ds1du, ds1dv, ds1dw, ds1dp],
+                     [ds2du, ds2dv, ds2dw, ds2dp],
+                     [ds3du, ds3dv, ds3dw, ds3dp],
+                     [ds4du, ds4dv, ds4dw, ds4dp]])
 
     return np.array([S,J], dtype=object)
 
-def boundary_op(t, state, sbp, bd_indices, bd_data):
-    N = len(state)
-    Sbd = np.zeros(N)
-    Jbd = sparse.csr_matrix((N, N))
 
-    for (bd_idx, (block_idx, side)) in enumerate(sbp.grid.get_boundaries()):
-        bd_info = sbp.grid.get_boundary_info(bd_idx)
+def backward_euler_step(op, prev_state, dt, tol, grid):
+    N = int(len(prev_state)/4)
 
-        if bd_info["type"] == "inflow":
-            S_bd, J_bd = inflow_operator(sbp, state, block_idx, side,
-                                         bd_data["wn_data"], bd_data["wt_data"], t)
+    R = grid.get_X(0).flatten()
+    R_big = np.array([R, R, R, R]).flatten()
 
-        elif bd_info["type"] == "pressure":
-            S_bd, J_bd =   pressure_operator(sbp, state, block_idx, side,
-                                             bd_data["p_data"],t)
+    def F(new_state):
+        T = R_big*np.concatenate(
+                [(new_state[0:int(3*N)] - prev_state[0:int(3*N)])/dt,
+                 np.zeros(N)])
+        S,Js = op(new_state)
 
-        elif bd_info["type"] == "outflow":
-            S_bd, J_bd =   outflow_operator(sbp, state, block_idx, side)
+        #Jacobian
+        #I = sparse.identity(N)
+        I = sparse.diags(R.flatten())
+        O = sparse.csr_matrix((N,N))
+        Jt = (1/dt)*sparse.bmat([[I, O, O, O],
+                                 [O, I, O, O],
+                                 [O, O, I, O],
+                                 [O, O, O, O]])
 
-        elif bd_info["type"] == "wall":
-            S_bd, J_bd = wall_operator(sbp, state, block_idx, side)
+        return T+S, Jt+Js
 
-        elif bd_info["type"] == "jans_inflow_operator":
-            S_bd, J_bd = jans_inflow_operator(sbp, state, block_idx, side,
-                                              bd_data["jans_data"])
+    new_state = prev_state.copy()
+    n_iter = 0
+    while True:
+        L, J = F(new_state)
+        err = np.linalg.norm(L, ord=np.inf)
+        print(err)
+        
+        if err < tol:
+            break
 
-        elif bd_info["type"] == "periodic":
-            S_bd = np.zeros(N)
-            J_bd = sparse.csr_matrix((N, N))
+        if err > 1e7 or n_iter > 20: #temp magic constant
+            raise Exception("Newton diverging, try decreasing dt.")
 
-        Sbd += S_bd
-        Jbd += J_bd
-    return Sbd, Jbd
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+#                delta = sparse.linalg.spsolve(J,L)
+                delta,exitCode = sparse.linalg.gmres(J,L, atol = tol)
+                print(exitCode)
+        except sparse.linalg.MatrixRankWarning:
+            #Small perturbation if singular Jacobian
+            delta = np.random.normal(scale=1e-7, size=len(prev_state))
 
-def sum_interface_op(state, sbp):
-    N = len(state)
-    Sif = np.zeros(N)
-    Jif = sparse.csr_matrix((N, N))
+        new_state -= delta
+        n_iter += 1
 
-    for (if_idx,interface) in enumerate(sbp.grid.get_interfaces()):
-        ((idx1,side1),(idx2,side2)) = interface
+    #print("Error: {:.2e}".format(err))
+    return new_state
 
-        S_if, J_if = interface_operator(sbp, state, idx1, side1, idx2, side2, if_idx)
-        Sif += S_if
-        Jif += J_if
+def backward_euler_step_newton_krylov(op, prev_state, dt, tol, grid):
+    N = int(len(prev_state)/4)
 
-    return Sif, Jif
+    X = grid.get_X(0).flatten()
+    X_big = np.array([X, X, X, X]).flatten()
 
-def spatial_op(t,state, sbp, bd_indices, bd_data):
-    S,J      = euler_operator(sbp, state)
-    Sbd, Jbd = boundary_op(t,state, sbp, bd_indices, bd_data)
-    Sif, Jif = sum_interface_op(state, sbp)
+    def F(new_state):
+        T = np.concatenate(
+                [(new_state[0:int(3*N)] - prev_state[0:int(3*N)]),
+                 np.zeros(N)])
+        S = op(new_state)
+        return X_big*T+S*dt
 
-    return S + Sbd + Sif, J + Jbd + Jif
+    n_iter = 0
+    err = 10
+    new_state = prev_state.copy()
 
-def solve_euler_ibvp(sbp, bd_indices, bd_data, init_u, init_v, init_p, \
-                dt, num_timesteps, name_base = None): 
-    """ Solve Euler equations
+    while err > tol and n_iter < 5:
+        new_state = scipy.optimize.newton_krylov(F,new_state, verbose=True,
+                                                 iter = 200, f_tol=tol) 
+        err = np.max(np.abs(F(new_state)))
+        n_iter += 1
+    return new_state
 
+
+def solve(grid, spatial_operator, init_u, init_v, init_w, init_p, dt, num_steps,
+          name_base):
+    """ Solves an Euler problem.
     Arguments:
-        spatial_op: spatial operator also including the SATs
-        grid:  MultiblockGridgrid-object
-        sol_array: output from solve_ivp@solve.py
-        init_u,v,p: multiblock function containing the initial data for u,v,p
-        dt: time step
-        num_timesteps: number of time steps
-
-    Returns:
-        U: A list of multiblock functions representing u in each time step.
-        V: A list of multiblock functions representing v in each time step.
-        P: A list of multiblock functions representing p in each time step.
-    """
-    init         = np.array([flatten_multiblock_vector(init_u),
-                             flatten_multiblock_vector(init_v),
-                             flatten_multiblock_vector(init_p)]).flatten()
-    spatial_func = lambda t,state: spatial_op(t, state, sbp, bd_indices, bd_data)
-
-    file_name = name_base + str(0)
-    export_to_tecplot(sbp,init_u,init_v,init_p,file_name)
-
-    sol = init
-    tol = 1e-12
-    sol_norm = []
-    N = int(len(sol)/3)
-    time_vec = []
-    for k in tqdm(range(num_timesteps)):
-        L = spatial_func(k*dt,sol)[0]
-
-        if k == 0:
-            prev_state = sol
-            sol = bdf1_step(k*dt,spatial_func,prev_state,dt,tol,incompressible = True)
-        else:
-            prev_prev_state = prev_state
-            prev_state = sol
-            sol = bdf2_step(k*dt, spatial_func, prev_prev_state,
-                            prev_state, dt, tol, incompressible = True)
-        #sol = sbp_in_time_step_dg(k*dt,spatial_func,sol,dt,tol)
-        U,V,P = vec_to_tensor(sbp.grid, sol)
-        file_name = name_base + str(k+1)
-        export_to_tecplot(sbp,U,V,P,file_name)
-        sol_norm.append(scipy.linalg.norm(sol[:N],ord=np.inf))
-        time_vec.append(k*dt)
-
-#    L = spatial_func(k*dt,sol)[0]
-#    plt.plot(time_vec,sol_norm)
-#    plt.show()
-
-    return vec_to_tensor(sbp.grid, sol)
-
-def solve_euler_steady_state(sbp, bd_indices, bd_data, init_u, init_v, init_p): 
-    """ Solve Euler equations
-
-    Arguments:
-        spatial_op: spatial operator also including the SATs
-        grid:  MultiblockGridgrid-object
-        sol_array: output from solve_ivp@solve.py
-        init_u,v,p: multiblock function containing the initial guess for u,v,p
-
-    Returns:
-        U: A list of multiblock functions representing u in each time step.
-        V: A list of multiblock functions representing v in each time step.
-        P: A list of multiblock functions representing p in each time step.
-    """
-    init         = np.array([flatten_multiblock_vector(init_u),
-                             flatten_multiblock_vector(init_v), 
-                             flatten_multiblock_vector(init_p)]).flatten()
-    spatial_func = lambda state: spatial_op(0, state, sbp, bd_indices, bd_data)
-    sol_array    = solve_steady_state(spatial_func, init)
-
-    return ivp_solution_to_euler_variables(sbp.grid, sol_array)
-
-
-def ivp_solution_to_euler_variables(grid, sol_array):
-    """ Convert sol_array from solve_ivp to U,V,P
-
-    Arguments:
-        grid:  MultiblockGridgrid-object
-        sol_array: output from solve_ivp@solve.py
+        grid: A MultiblockGrid object associated to the problem.
+        spatial_operator: A spatial operator built from the euler_operator 
+            plus SAT operators.
+        init_u: Initial data for u as a multiblock function.
+        init_v: Initial data for v as a multiblock function.
+        init_p: Initial data for p as a multiblock function.
 
     Returns:
         U: A list of multiblock functions representing u in each time step.
@@ -784,9 +473,29 @@ def ivp_solution_to_euler_variables(grid, sol_array):
     P=[]
     U=[]
     V=[]
-    for sol in sol_array:
+    W=[]
+    sol = np.array([init_u, init_v, init_w, init_p]).flatten()
+    sol = vec_to_tensor(grid, sol)
+    U.append(sol[0][0])
+    V.append(sol[1][0])
+    W.append(sol[2][0])
+    P.append(sol[3][0])
+    sol = sol.flatten()
+
+    spat_op = lambda x: spatial_operator(x)[0]
+    tol = 1e-10
+    for k in tqdm(range(num_steps)):
+        #sol = backward_euler_step_newton_krylov(spat_op, sol, dt, 
+        #                                                       tol, grid)
+        sol = backward_euler_step(spatial_operator, sol, dt, tol, grid)
+
         sol = vec_to_tensor(grid, sol)
-        U.append(sol[0])
-        V.append(sol[1])
-        P.append(sol[2])
-    return U,V,P
+        U.append(sol[0][0])
+        V.append(sol[1][0])
+        W.append(sol[2][0])
+        P.append(sol[3][0])
+        filename = name_base+str(k)+'.tec'
+        export_to_tecplot(grid,sol[0][0], sol[1][0], sol[2][0],sol[3][0],filename)
+        sol = sol.flatten()
+
+    return U,V,W,P
