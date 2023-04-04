@@ -1,0 +1,19 @@
+def get_rhs_matrix(lam, k, n2, a, b, alpha, beta, z, sbp):
+    N = len(z)
+    a = 0.5/k
+    b = 0.5*k*(n2-1.0)
+
+    I = np.eye(N)
+    D2 = sbp.D@sbp.D
+    E0 = np.zeros(N)
+    E0[0] = 1
+    E0 = scipy.sparse.diags(E0)
+
+    EN = np.zeros(N)
+    EN[-1] = 1
+    EN = scipy.sparse.diags(EN)
+
+    mat = 1j*(a*D2 + b@I)
+    SAT = 1j*a*sbp.P_inv@(E0@(sbp.D + alpha*I) - EN@(sbp.D - beta*I))
+    return mat + SAT
+
